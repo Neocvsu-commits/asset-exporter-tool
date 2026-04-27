@@ -10,7 +10,7 @@
 
 ## 2. 基本信息
 
-- 插件版本：`2.3.0`（正式版）
+- 插件版本：`2.3.1`（正式版）
 - Blender 支持：`3.6+`
 - 入口：`3D 视图 > N 面板 > Asset Export`
 
@@ -26,6 +26,14 @@
 6. 点击 `选择目录并导出`，选择导出根目录并执行。
 7. 导出后可点 `打开上次导出目录` 快速定位结果。
 
+## 3.1 本次版本更新（2.3.1）
+
+- FBX 导出策略升级为“纯模型优先”：
+  - 导出时强制剥离贴图路径（`path_mode="STRIP"`）
+  - 禁用贴图嵌入（`embed_textures=False`）
+  - 在导出副本上移除材质中的贴图节点引用，避免回导 FBX 出现粉色材质依赖
+- 适配场景：ORM/ARM 等分离贴图工作流，贴图由后续规则进行重链接而非依赖 FBX 内记录路径。
+
 ## 4. 导出参数（FBX / GLB）
 
 ### 4.1 设计原则
@@ -40,6 +48,8 @@
   - 仅选中物体（`use_selection=True`）
   - 物体类型默认网格（`object_types={"MESH"}`）
   - 三角化（`use_triangles=True`）
+  - 贴图路径模式默认剥离（`path_mode="STRIP"`）
+  - 默认不嵌入贴图（`embed_textures=False`）
   - 应用修改器、切线空间、单位/空间变换等按当前导出策略预填
 - GLB：
   - 导出格式默认 `GLB`
@@ -51,7 +61,7 @@
 ### 4.3 统一导出阶段的强制项
 为保证流程稳定，统一导出时会固定以下规则：
 
-- FBX：强制 `use_selection=True`，并限制 `object_types={"MESH"}`
+- FBX：强制 `use_selection=True`、`object_types={"MESH"}`、`path_mode="STRIP"`，并禁用 `embed_textures`
 - GLB：强制 `export_format="GLB"` 且 `use_selection=True`
 
 ## 5. 主要功能说明

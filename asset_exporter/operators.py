@@ -113,6 +113,9 @@ class ASSET_EXPORTER_V2_OT_OpenFBXAdvancedOptions(bpy.types.Operator):
             "use_mesh_edges": False,
             "use_triangles": True,
             "use_tspace": True,
+            # 纯模型策略：FBX 不保留贴图路径，不做贴图嵌入。
+            "path_mode": "STRIP",
+            "embed_textures": False,
         }
         for key, value in defaults.items():
             try:

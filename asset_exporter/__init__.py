@@ -2,7 +2,7 @@ bl_info = {
     "name": "资产导出助手",
     "description": "资产规范化导出：FBX/GLB、基础信息与审查报告、Blend 与贴图提取（正式版）",
     "author": "Neo",
-    "version": (2, 3, 0),
+    "version": (2, 3, 1),
     "blender": (3, 6, 0),
     "location": "3D 视图 > N 面板 > Asset Export",
     "warning": "",
