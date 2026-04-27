@@ -1,0 +1,1 @@
+This module follows the same internal licensing policy as the team tools in this repository.
