@@ -33,10 +33,10 @@ class ASSET_EXPORTER_V2_Properties(bpy.types.PropertyGroup):
     )
     export_mode: bpy.props.EnumProperty(
         name="导出模式",
-        description="选择合并导出或逐个导出",
+        description="合并：多选 → 一个 FBX/GLB 文件，文件内仍为多个独立物体；逐个：每个物体各一套与物体名同源的导出文件",
         items=[
-            ("MERGED", "合并导出", "将选中模型合并后导出为一个资产包"),
-            ("INDIVIDUAL", "逐个导出", "每个选中模型分别导出为独立资产包"),
+            ("MERGED", "合并导出", "多选模型写入同一 .fbx/.glb，文件内保持多个独立物体与现有命名"),
+            ("INDIVIDUAL", "逐个导出", "按当前每个物体各导出一套文件，主文件名与物体名一致（重名时自动加后缀）"),
         ],
         default="MERGED",
     )
@@ -62,12 +62,12 @@ class ASSET_EXPORTER_V2_Properties(bpy.types.PropertyGroup):
     )
     export_check_csv: bpy.props.BoolProperty(
         name="导出资产审查 CSV",
-        description="联动「资产审查助手」：与顶栏检查内导出报告相同列（Object, Check, Status, Message），需先对选中物体运行检查",
+        description="联动「资产审查助手」：导出转置简洁表（模型名称/基本信息/各检查项），与旧版矩阵一致；需先对选中物体运行检查",
         default=True,
     )
     export_check_json: bpy.props.BoolProperty(
         name="导出资产审查 JSON",
-        description="联动「资产审查助手」：与检查结果的 rows 结构一致，需先对选中物体运行检查",
+        description="联动「资产审查助手」：与审查 CSV 同层级（objects/basic_info/checks），仅键名英文，便于开发读取",
         default=True,
     )
     export_blend: bpy.props.BoolProperty(
@@ -82,7 +82,7 @@ class ASSET_EXPORTER_V2_Properties(bpy.types.PropertyGroup):
     )
     export_base_name: bpy.props.StringProperty(
         name="资产命名",
-        description="合并导出：文件夹与主文件名；逐个导出时以各物体名为准",
+        description="主名称：合并导出时作为文件夹与 .fbx/.glb 主文件名；逐个导出时各文件仍取物体名，可点刷新将活动物体名填入此处作对照或切换模式后使用",
         default="",
     )
     export_chinese_name: bpy.props.StringProperty(

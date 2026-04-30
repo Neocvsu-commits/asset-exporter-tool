@@ -29,7 +29,7 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
             if len(selected_meshes) == 1 and active and active.type == "MESH":
                 box.label(text=f"已选中: {active.name}", icon="OBJECT_DATA")
             else:
-                mode_tip = "导出将合并" if props.export_mode == "MERGED" else "将逐个导出"
+                mode_tip = "将打成一个文件（内多物体）" if props.export_mode == "MERGED" else "将按物体各出一套文件"
                 box.label(text=f"共选中 {len(selected_meshes)} 个模型（{mode_tip}）", icon="GROUP")
 
             if active and active.type == "MESH":
@@ -141,12 +141,12 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
         name_box = layout.box()
         name_box.label(text="导出命名", icon="SORTALPHA")
         if props.export_mode == "MERGED":
-            name_box.label(text="预设已填入下方，可点刷新同步物体名", icon="INFO")
-            row_name = name_box.row(align=True)
-            row_name.prop(props, "export_base_name", text="主名称")
-            row_name.operator("asset_exporter_v2.refresh_export_name", text="", icon="FILE_REFRESH")
+            name_box.label(text="合并：主名称 = 文件夹与主 .fbx/.glb 文件名；刷新取当前活动物体名", icon="INFO")
         else:
-            name_box.label(text="逐个导出时将使用各物体名", icon="BLANK1")
+            name_box.label(text="逐个：各文件名为物体名；刷新可将活动物体名填入下方作对照", icon="INFO")
+        row_name = name_box.row(align=True)
+        row_name.prop(props, "export_base_name", text="主名称")
+        row_name.operator("asset_exporter_v2.refresh_export_name", text="", icon="FILE_REFRESH")
         name_box.prop(props, "export_chinese_name", text="中文名称")
 
         hint_box = layout.box()

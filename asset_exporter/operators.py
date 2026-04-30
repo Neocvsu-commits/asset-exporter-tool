@@ -19,8 +19,7 @@ class ASSET_EXPORTER_V2_OT_RefreshExportName(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        props = getattr(context.scene, "asset_exporter_v2_props", None)
-        return bool(props and props.export_mode == "MERGED")
+        return len(get_selected_meshes(context)) > 0
 
     def execute(self, context):
         props = context.scene.asset_exporter_v2_props

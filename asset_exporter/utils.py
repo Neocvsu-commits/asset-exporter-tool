@@ -132,6 +132,64 @@ def get_transform_status(obj):
     return has_loc, has_rot, has_scale
 
 
+def total_mesh_triangle_count(objs):
+    t = 0
+    for o in objs or []:
+        if not o or getattr(o, "type", None) != "MESH" or not o.data:
+            continue
+        o.data.calc_loop_triangles()
+        t += len(o.data.loop_triangles)
+    return t
+
+
+def collect_unique_material_names(objs):
+    names = []
+    seen = set()
+    for o in objs or []:
+        if not o or getattr(o, "type", None) != "MESH":
+            continue
+        for slot in getattr(o, "material_slots", []) or []:
+            mat = slot.material
+            if mat and mat.name not in seen:
+                seen.add(mat.name)
+                names.append(mat.name)
+    return names
+
+
+def collect_texture_details_from_objects(objs):
+    details = []
+    seen_images = set()
+    for o in objs or []:
+        if not o or getattr(o, "type", None) != "MESH":
+            continue
+        for name, res, path in collect_texture_details(o):
+            if name in seen_images:
+                continue
+            seen_images.add(name)
+            details.append((name, res, path))
+    return details
+
+
+def sync_copy_names_from_sources(source_objects, copied_objects):
+    """
+    合并导出：副本使用与源物体一致的物体名写入 FBX/GLB（必要时暂时改冲突对象名，便于 finally 恢复）。
+    """
+    renamed = []
+    if len(source_objects) != len(copied_objects):
+        return renamed
+    for src, dst in zip(source_objects, copied_objects):
+        desired = sanitize_export_basename(src.name) or src.name.replace(".", "_")
+        conflict = bpy.data.objects.get(desired)
+        if conflict and conflict != dst:
+            old_c = conflict.name
+            conflict.name = _make_unique_temp_name(desired)
+            renamed.append((conflict, old_c))
+        old_dst = dst.name
+        dst.name = desired
+        renamed.append((dst, old_dst))
+    return renamed
+
+
 def collect_texture_details(obj):
     texture_details = []
     seen_images = set()
@@ -226,12 +284,12 @@ def get_animation_and_rig_status(obj):
     return is_rigged, has_animation, animation_types
 
 
-def write_basic_information_csv(obj, report_path, model_file_path, export_textures, asset_chinese_name, asset_name_override=None, forward_axis="未定义", global_quat=None):
-    obj.data.calc_loop_triangles()
-    tri_count = len(obj.data.loop_triangles)
+def _build_basic_information_rows(obj, model_file_path, export_textures, asset_chinese_name, asset_name_override=None, forward_axis="未定义", global_quat=None, all_mesh_objects=None):
+    meshes = list(all_mesh_objects) if all_mesh_objects else [obj]
+    tri_count = total_mesh_triangle_count(meshes)
     has_loc, has_rot, has_scale = get_transform_status(obj)
-    material_names = [slot.material.name for slot in obj.material_slots if slot.material]
-    texture_details = collect_texture_details(obj)
+    material_names = collect_unique_material_names(meshes)
+    texture_details = collect_texture_details_from_objects(meshes)
     dimensions = obj.dimensions
     asset_name = asset_name_override or obj.name
     is_rigged, has_animation, animation_types = get_animation_and_rig_status(obj)
@@ -240,88 +298,69 @@ def write_basic_information_csv(obj, report_path, model_file_path, export_textur
     excel_safe_forward_axis = forward_axis
     if forward_axis in ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]:
         excel_safe_forward_axis = f"{forward_axis[1]}轴 ({'正' if forward_axis[0] == '+' else '负'})"
-        
+
     rows = [
-        ["检查项", "结果", "状态", "备注"],
-        ["资产名称", asset_name, "PASS", "导出资产名称（与文件名同源）"],
-        ["资产中文名称", asset_chinese_name or "", "INFO", "仅用于中文检索/开发读取"],
-        ["模型文件名", os.path.basename(model_file_path) if model_file_path else "未导出模型文件", "PASS", "主导出模型文件"],
-        ["尺寸 X", f"{dimensions.x:.3f}", "INFO", "单位：米 (m)"],
-        ["尺寸 Y", f"{dimensions.y:.3f}", "INFO", "单位：米 (m)"],
-        ["尺寸 Z", f"{dimensions.z:.3f}", "INFO", "单位：米 (m)"],
-        ["三角面数", str(tri_count), "INFO", "合并后网格的三角面数量 (Tris)"],
-        ["材质球数量", str(len(material_names)), "INFO", "有效材质槽统计"],
-        ["材质球名称", " | ".join(material_names) if material_names else "无", "INFO", "合并后材质列表"],
-        ["贴图导出开关", "开启" if export_textures else "关闭", "INFO", "来自插件导出选项"],
-        ["贴图数量", str(len(texture_details)), "INFO", "唯一贴图节点统计"],
-        ["位置归零检查", "未归零" if has_loc else "已归零", "WARNING" if has_loc else "PASS", "导出时会自动修复"],
-        ["旋转应用检查", "未应用" if has_rot else "已应用", "WARNING" if has_rot else "PASS", "导出时会自动修复"],
-        ["缩放归一检查", "未归一" if has_scale else "已归一", "WARNING" if has_scale else "PASS", "导出时会自动修复"],
-        ["是否绑定骨骼", "是" if is_rigged else "否", "INFO", "检测 ARMATURE 修改器或父级为骨骼对象"],
-        ["是否包含动画", "是" if has_animation else "否", "INFO", "检测骨骼动画与形态键动画"],
-        ["动画类型", animation_types_csv, "INFO", "骨骼动画 | 形态键动画；无则为“无”"],
-        ["模型正前方向", excel_safe_forward_axis, "INFO", "来自导出界面的辅助箭头标记"],
-        [
-            "全局旋转四元数",
-            str(_normalize_basic_info_global_quat(global_quat)),
-            "INFO",
-            "[W, X, Y, Z] 格式 (从世界矩阵提取)",
-        ],
+        {"field_key": "asset_name", "field_label_cn": "资产名称", "value": asset_name, "status": "PASS", "note": "导出资产名称（与文件名同源）"},
+        {"field_key": "asset_chinese_name", "field_label_cn": "资产中文名称", "value": asset_chinese_name or "", "status": "INFO", "note": "仅用于中文检索/开发读取"},
+        {"field_key": "model_file_name", "field_label_cn": "模型文件名", "value": os.path.basename(model_file_path) if model_file_path else "未导出模型文件", "status": "PASS", "note": "主导出模型文件"},
+        {"field_key": "dimension_x_m", "field_label_cn": "尺寸 X", "value": f"{dimensions.x:.3f}", "status": "INFO", "note": "单位：米 (m)"},
+        {"field_key": "dimension_y_m", "field_label_cn": "尺寸 Y", "value": f"{dimensions.y:.3f}", "status": "INFO", "note": "单位：米 (m)"},
+        {"field_key": "dimension_z_m", "field_label_cn": "尺寸 Z", "value": f"{dimensions.z:.3f}", "status": "INFO", "note": "单位：米 (m)"},
+        {"field_key": "triangle_count", "field_label_cn": "三角面数", "value": str(tri_count), "status": "INFO", "note": "多物体汇总三角面数量 (Tris)" if len(meshes) > 1 else "当前网格的三角面数量 (Tris)"},
+        {"field_key": "material_count", "field_label_cn": "材质球数量", "value": str(len(material_names)), "status": "INFO", "note": "有效材质槽统计（多物体时去重）"},
+        {"field_key": "material_names", "field_label_cn": "材质球名称", "value": " | ".join(material_names) if material_names else "无", "status": "INFO", "note": "材质列表（多物体时去重）"},
+        {"field_key": "export_textures_enabled", "field_label_cn": "贴图导出开关", "value": "开启" if export_textures else "关闭", "status": "INFO", "note": "来自插件导出选项"},
+        {"field_key": "texture_count", "field_label_cn": "贴图数量", "value": str(len(texture_details)), "status": "INFO", "note": "唯一贴图节点统计"},
+        {"field_key": "location_zero_check", "field_label_cn": "位置归零检查", "value": "未归零" if has_loc else "已归零", "status": "WARNING" if has_loc else "PASS", "note": "导出时会自动修复"},
+        {"field_key": "rotation_apply_check", "field_label_cn": "旋转应用检查", "value": "未应用" if has_rot else "已应用", "status": "WARNING" if has_rot else "PASS", "note": "导出时会自动修复"},
+        {"field_key": "scale_unify_check", "field_label_cn": "缩放归一检查", "value": "未归一" if has_scale else "已归一", "status": "WARNING" if has_scale else "PASS", "note": "导出时会自动修复"},
+        {"field_key": "is_rigged", "field_label_cn": "是否绑定骨骼", "value": "是" if is_rigged else "否", "status": "INFO", "note": "检测 ARMATURE 修改器或父级为骨骼对象"},
+        {"field_key": "has_animation", "field_label_cn": "是否包含动画", "value": "是" if has_animation else "否", "status": "INFO", "note": "检测骨骼动画与形态键动画"},
+        {"field_key": "animation_types", "field_label_cn": "动画类型", "value": animation_types_csv, "status": "INFO", "note": "骨骼动画 | 形态键动画；无则为“无”"},
+        {"field_key": "forward_axis", "field_label_cn": "模型正前方向", "value": excel_safe_forward_axis, "status": "INFO", "note": "来自导出界面的辅助箭头标记"},
+        {"field_key": "global_rotation_quaternion_wxyz", "field_label_cn": "全局旋转四元数", "value": str(_normalize_basic_info_global_quat(global_quat)), "status": "INFO", "note": "[W, X, Y, Z] 格式 (从世界矩阵提取)"},
     ]
 
     if texture_details:
-        for img_name, resolution, source_path in texture_details:
-            rows.append(["贴图详情", img_name, "INFO", f"{resolution} | {source_path}"])
+        for idx, (img_name, resolution, source_path) in enumerate(texture_details, start=1):
+            rows.append({"field_key": f"texture_detail_{idx:03d}", "field_label_cn": "贴图详情", "value": img_name, "status": "INFO", "note": f"{resolution} | {source_path}"})
     else:
-        rows.append(["贴图详情", "无", "INFO", "当前对象未检测到贴图节点"])
+        rows.append({"field_key": "texture_detail_001", "field_label_cn": "贴图详情", "value": "无", "status": "INFO", "note": "当前对象未检测到贴图节点"})
+
+    return rows
+
+
+def write_basic_information_csv(obj, report_path, model_file_path, export_textures, asset_chinese_name, asset_name_override=None, forward_axis="未定义", global_quat=None, all_mesh_objects=None):
+    rows = _build_basic_information_rows(
+        obj,
+        model_file_path,
+        export_textures,
+        asset_chinese_name,
+        asset_name_override,
+        forward_axis,
+        global_quat,
+        all_mesh_objects,
+    )
 
     with open(report_path, "w", newline="", encoding="utf-8-sig") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerows(rows)
+        writer.writerow(["检查项", "结果", "状态", "备注"])
+        for r in rows:
+            writer.writerow([r["field_label_cn"], r["value"], r["status"], r["note"]])
 
 
-def write_basic_information_json(obj, json_path, model_file_path, export_textures, asset_chinese_name, asset_name_override=None, forward_axis="未定义", global_quat=None):
-    obj.data.calc_loop_triangles()
-    tri_count = len(obj.data.loop_triangles)
-    has_loc, has_rot, has_scale = get_transform_status(obj)
-    material_names = [slot.material.name for slot in obj.material_slots if slot.material]
-    texture_details = collect_texture_details(obj)
-    dimensions = obj.dimensions
-    asset_name = asset_name_override or obj.name
-    is_rigged, has_animation, animation_types = get_animation_and_rig_status(obj)
-    quat_norm = _normalize_basic_info_global_quat(global_quat)
-
-    # 字段顺序与数值精度与 *_BasicInformation.json 样例（SM_BDX01 / SM_SHQD01）一致
-    payload = {
-        "asset_name": asset_name,
-        "asset_chinese_name": asset_chinese_name or "",
-        "model_file_name": os.path.basename(model_file_path) if model_file_path else "未导出模型文件",
-        "dimensions_meters": {
-            "x": round(float(dimensions.x), 3),
-            "y": round(float(dimensions.y), 3),
-            "z": round(float(dimensions.z), 3),
-        },
-        "triangle_count": int(tri_count),
-        "material_count": int(len(material_names)),
-        "material_names": material_names,
-        "export_textures_enabled": bool(export_textures),
-        "texture_count": int(len(texture_details)),
-        "transform_check": {
-            "location_not_zero": bool(has_loc),
-            "rotation_not_applied": bool(has_rot),
-            "scale_not_unified": bool(has_scale),
-        },
-        "rig_and_animation": {
-            "is_rigged": bool(is_rigged),
-            "has_animation": bool(has_animation),
-            "animation_types": list(animation_types),
-        },
-        "forward_axis": forward_axis,
-        "global_rotation_quaternion": quat_norm,
-        "texture_details": [
-            {"name": n, "resolution": r, "source_path": p} for (n, r, p) in texture_details
-        ],
-    }
+def write_basic_information_json(obj, json_path, model_file_path, export_textures, asset_chinese_name, asset_name_override=None, forward_axis="未定义", global_quat=None, all_mesh_objects=None):
+    rows = _build_basic_information_rows(
+        obj,
+        model_file_path,
+        export_textures,
+        asset_chinese_name,
+        asset_name_override,
+        forward_axis,
+        global_quat,
+        all_mesh_objects,
+    )
+    payload = {"fields": rows}
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -756,25 +795,205 @@ def _write_assets_check_json_v1_legacy(module, object_names, report_path):
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
-def write_assets_check_csv(context, object_names, report_path, check_status):
-    """与资产审查助手「导出报告」CSV 列一致：Object, Check, Status, Message（v2）；旧版仍为转置矩阵。"""
+def _row_object_name_v2(r):
+    """兼容 results_json 中物体名字段（含历史/别名键）。"""
+    if not isinstance(r, dict):
+        return ""
+    return (
+        r.get("object_name")
+        or r.get("ObjectName")
+        or r.get("object")
+        or ""
+    )
+
+
+def _filter_v2_check_rows(rows, object_names, extra_aliases=None):
+    """
+    按当前导出选中物体名过滤检查行。若仅精确匹配会漏行（例如检查后改过物体名），则尝试：
+    额外别名（如导出主文件名）、大小写/首尾空白忽略；仍无匹配且结果里仅含单一物体时回落为该物体全部行。
+    """
+    if not rows:
+        return []
+    names = {str(n) for n in object_names if n is not None}
+    extras = {str(a) for a in (extra_aliases or []) if a is not None and str(a).strip()}
+    pool = names | extras
+
+    filtered = [r for r in rows if _row_object_name_v2(r) in pool]
+    if filtered:
+        return filtered
+
+    def norm(x):
+        return str(x or "").strip().casefold()
+
+    npool = {norm(x) for x in pool}
+    filtered = [r for r in rows if norm(_row_object_name_v2(r)) in npool]
+    if filtered:
+        return filtered
+
+    distinct_row_objs = {norm(_row_object_name_v2(r)) for r in rows if _row_object_name_v2(r)}
+    if len(distinct_row_objs) == 1 and len(names) == 1:
+        # 单一物体检查结果与当前选中名不一致（常见：检查后改名），仍导出该批行
+        return list(rows)
+
+    return []
+
+
+# 与资产审查助手 ui.CHECK_LABELS 一致，供无法 import 时回退
+_CHECK_LABEL_CN_FALLBACK = {
+    "ngon": "N多边面",
+    "empty_material_slot": "空材质槽",
+    "transform": "变换检查",
+    "missing_textures": "贴图丢失",
+    "uv_bounds": "UV越界",
+    "uv_overlap": "UV重叠",
+    "non_manifold": "非流形边",
+    "loose_geometry": "游离点边",
+    "doubled_vertices": "重叠顶点",
+    "poles": "极点星点",
+    "normal_direction": "法线方向",
+    "nonplanar_faces": "不平整面",
+    "self_intersection": "交叉边面",
+    "zero_edges": "零边检查",
+    "uv_layer_count": "UV数",
+    "vertex_color_count": "顶点色数",
+    "ue_vertex_color_naming": "命名规范",
+    "apply_scale": "应用缩放",
+    "transform_zero": "变换归零",
+    "pivot_position": "轴心位置",
+    "modifier": "修改器",
+    "animation": "动画检查",
+    "vertex_weight": "顶点权重",
+    "collision": "碰撞检查",
+}
+
+
+def _get_check_label_cn():
+    try:
+        from assets_check.ui import CHECK_LABELS
+
+        return CHECK_LABELS if isinstance(CHECK_LABELS, dict) else _CHECK_LABEL_CN_FALLBACK
+    except Exception:
+        return _CHECK_LABEL_CN_FALLBACK
+
+
+# 与审查矩阵顺序对齐（见 assets_check.ui._enabled_check_ids），并补上运行管线中的 transform
+_CHECK_ORDER_V2 = [
+    "empty_material_slot",
+    "missing_textures",
+    "transform",
+    "uv_bounds",
+    "uv_overlap",
+    "uv_layer_count",
+    "vertex_color_count",
+    "ngon",
+    "non_manifold",
+    "loose_geometry",
+    "doubled_vertices",
+    "poles",
+    "normal_direction",
+    "nonplanar_faces",
+    "zero_edges",
+    "self_intersection",
+    "apply_scale",
+    "transform_zero",
+    "pivot_position",
+    "modifier",
+    "animation",
+    "vertex_weight",
+    "collision",
+    "ue_vertex_color_naming",
+]
+
+
+def _v2_cell_pass_fail_display(row_dict):
+    """与旧版 CSV 一致：Pass/Fail；UV数/顶点色数等展示 display_value。"""
+    if not isinstance(row_dict, dict):
+        return ""
+    cid = row_dict.get("check_id", "") or ""
+    dv = (row_dict.get("display_value") or "").strip()
+    if cid in ("uv_layer_count", "vertex_color_count") and dv:
+        return dv
+    st = (row_dict.get("status") or "").upper()
+    if st == "PASS":
+        return "Pass (通过)"
+    return "Fail (警告/错误)"
+
+
+def _build_assets_check_v2_transposed_payload(context, filtered_rows):
+    from collections import OrderedDict
+
+    labels = _get_check_label_cn()
+    by_obj = OrderedDict()
+    for r in filtered_rows:
+        on = _row_object_name_v2(r)
+        if not on:
+            continue
+        if on not in by_obj:
+            by_obj[on] = {}
+        cid = r.get("check_id", "") or ""
+        by_obj[on][cid] = r
+
+    objects_order = list(by_obj.keys())
+    if not objects_order:
+        raise RuntimeError("没有可写入的检查行（物体名为空）")
+
+    basic_infos = []
+    for oname in objects_order:
+        obj = bpy.data.objects.get(oname)
+        if obj and getattr(obj, "type", None) == "MESH" and obj.data:
+            basic_infos.append(str(len(obj.data.polygons)))
+        else:
+            basic_infos.append("")
+
+    present_ids = set()
+    for mp in by_obj.values():
+        present_ids.update(mp.keys())
+
+    ordered_ids = [cid for cid in _CHECK_ORDER_V2 if cid in present_ids]
+    rest = sorted(present_ids - set(ordered_ids))
+    ordered_ids.extend(rest)
+
+    checks = []
+    for cid in ordered_ids:
+        label_cn = labels.get(cid, cid)
+        if cid == "ue_vertex_color_naming":
+            label_cn = "命名规范"
+        values = []
+        for oname in objects_order:
+            cell = by_obj[oname].get(cid)
+            values.append(_v2_cell_pass_fail_display(cell) if cell else "")
+        checks.append({"check_id": cid, "check_label_cn": label_cn, "values": values})
+
+    return {
+        "objects": objects_order,
+        "basic_info": basic_infos,
+        "checks": checks,
+    }
+
+
+def _write_assets_check_csv_v2_transposed(context, filtered_rows, report_path):
+    payload = _build_assets_check_v2_transposed_payload(context, filtered_rows)
+    transposed_rows = [
+        ["模型名称"] + payload["objects"],
+        ["基本信息"] + payload["basic_info"],
+    ]
+    for c in payload["checks"]:
+        transposed_rows.append([c["check_label_cn"]] + c["values"])
+
+    with open(report_path, mode="w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerows(transposed_rows)
+
+
+def write_assets_check_csv(context, object_names, report_path, check_status, extra_object_aliases=None):
+    """v2：简洁转置 CSV（与旧版矩阵一致）；v1：沿用旧版转置；审查助手顶栏「导出报告」仍为长表，此处单独保持简洁。"""
     backend = check_status.get("backend")
     if backend == "v2":
         rows = _assets_check_v2_rows(context.scene)
         if not rows:
             raise RuntimeError("没有可用的资产审查结果，请先执行检查")
-        names = set(object_names)
-        filtered = [r for r in rows if r.get("object_name") in names]
-        with open(report_path, mode="w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Object", "Check", "Status", "Message"])
-            for r in filtered:
-                writer.writerow([
-                    r.get("object_name", ""),
-                    r.get("check_id", ""),
-                    r.get("status", ""),
-                    r.get("message", ""),
-                ])
+        filtered = _filter_v2_check_rows(rows, object_names, extra_object_aliases)
+        _write_assets_check_csv_v2_transposed(context, filtered, report_path)
         return
     if backend == "v1" and check_status.get("module"):
         _write_assets_check_csv_v1_legacy(check_status["module"], object_names, report_path)
@@ -782,17 +1001,17 @@ def write_assets_check_csv(context, object_names, report_path, check_status):
     raise RuntimeError("没有可用的资产审查数据源")
 
 
-def write_assets_check_json(context, object_names, report_path, check_status):
-    """v2 与审查助手一致：{\"rows\": [...] }；v1 为旧 objects 结构。"""
+def write_assets_check_json(context, object_names, report_path, check_status, extra_object_aliases=None):
+    """v2：与 CSV 同层级结构（objects/basic_info/checks），仅键名英文；v1 为旧 objects 结构。"""
     backend = check_status.get("backend")
     if backend == "v2":
         rows = _assets_check_v2_rows(context.scene)
         if not rows:
             raise RuntimeError("没有可用的资产审查结果，请先执行检查")
-        names = set(object_names)
-        filtered = [r for r in rows if r.get("object_name") in names]
+        filtered = _filter_v2_check_rows(rows, object_names, extra_object_aliases)
+        payload = _build_assets_check_v2_transposed_payload(context, filtered)
         with open(report_path, "w", encoding="utf-8") as f:
-            json.dump({"rows": filtered}, f, ensure_ascii=False, indent=2)
+            json.dump(payload, f, ensure_ascii=False, indent=2)
         return
     if backend == "v1" and check_status.get("module"):
         _write_assets_check_json_v1_legacy(check_status["module"], object_names, report_path)
@@ -934,60 +1153,124 @@ def run_export_pipeline(context, base_dir, reporter):
                 
         global_quat = main_source_obj.matrix_world.to_quaternion()
         global_quat_list = [round(global_quat.w, 6), round(global_quat.x, 6), round(global_quat.y, 6), round(global_quat.z, 6)]
-        
+
+        temp_objects = []
         bpy.ops.object.duplicate()
 
-        copied_objects = context.selected_objects.copy()
-        if len(copied_objects) > 1:
-            context.view_layer.objects.active = copied_objects[0]
-            bpy.ops.object.join()
+        copied_objects = [o for o in context.selected_objects if getattr(o, "type", None) == "MESH"]
+        if len(copied_objects) != len(source_objects):
+            raise RuntimeError("复制结果与选中网格数量不一致，请重试导出")
 
-        temp_obj = context.active_object
-        renamed_pairs = reserve_object_name_for_export(temp_obj, export_model_name)
+        temp_objects = copied_objects
+        if len(source_objects) == 1:
+            renamed_pairs = reserve_object_name_for_export(temp_objects[0], export_model_name)
+        else:
+            # 合并导出：一个 FBX/GLB 内保留多个独立物体，物体名与选中源一致
+            renamed_pairs = sync_copy_names_from_sources(source_objects, temp_objects)
+
+        temp_obj = temp_objects[0]
 
         try:
+            report_meshes = temp_objects if len(temp_objects) > 1 else None
             main_model_path = fbx_path if props.export_fbx else (glb_path if props.export_glb else "")
             if props.export_csv:
-                write_basic_information_csv(temp_obj, report_path, main_model_path, props.export_textures, props.export_chinese_name, export_model_name, forward_axis, global_quat_list)
+                write_basic_information_csv(
+                    temp_obj,
+                    report_path,
+                    main_model_path,
+                    props.export_textures,
+                    props.export_chinese_name,
+                    export_model_name,
+                    forward_axis,
+                    global_quat_list,
+                    all_mesh_objects=report_meshes,
+                )
             if props.export_basic_json:
-                write_basic_information_json(temp_obj, basic_json_path, main_model_path, props.export_textures, props.export_chinese_name, export_model_name, forward_axis, global_quat_list)
+                write_basic_information_json(
+                    temp_obj,
+                    basic_json_path,
+                    main_model_path,
+                    props.export_textures,
+                    props.export_chinese_name,
+                    export_model_name,
+                    forward_axis,
+                    global_quat_list,
+                    all_mesh_objects=report_meshes,
+                )
             # 资产审查联动：任何异常都不应阻止模型正常导出，只给出警告并跳过
             # v2 下即便“未完全覆盖选中对象”，也允许导出当前可匹配到的结果（含空结构文件）。
             can_try_export_check = check_status.get("backend") in {"v2", "v1"}
             if (props.export_check_csv or props.export_check_json) and can_try_export_check:
                 try:
                     names = {obj.name for obj in source_objects}
+                    check_aliases = [export_model_name]
                     if props.export_check_csv:
-                        write_assets_check_csv(context, names, check_report_path, check_status)
+                        write_assets_check_csv(
+                            context,
+                            names,
+                            check_report_path,
+                            check_status,
+                            extra_object_aliases=check_aliases,
+                        )
                     if props.export_check_json:
-                        write_assets_check_json(context, names, check_json_path, check_status)
+                        write_assets_check_json(
+                            context,
+                            names,
+                            check_json_path,
+                            check_status,
+                            extra_object_aliases=check_aliases,
+                        )
                 except Exception as e:
                     reporter.report({"WARNING"}, f"导出资产审查 CSV/JSON 失败，已跳过：{e}")
 
-            # 先应用变换，保证导出的坐标/尺寸正确
+            bpy.ops.object.select_all(action="DESELECT")
+            for o in temp_objects:
+                o.select_set(True)
+            context.view_layer.objects.active = temp_objects[0]
             bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
             # 在导出副本上执行一次三角化，避免目标 DCC/引擎仍然保留 N 边面/四边面
-            try:
-                tri_mod = temp_obj.modifiers.new(name="__TEMP_TRIANGULATE__", type='TRIANGULATE')
-                bpy.ops.object.modifier_apply(modifier=tri_mod.name)
-            except Exception as e:
-                print(f"[Asset Exporter] 三角化失败，已跳过：{e}")
+            for i, o in enumerate(temp_objects):
+                try:
+                    tri_mod = o.modifiers.new(name=f"__TEMP_TRI_{i}", type="TRIANGULATE")
+                    bpy.ops.object.select_all(action="DESELECT")
+                    o.select_set(True)
+                    context.view_layer.objects.active = o
+                    bpy.ops.object.modifier_apply(modifier=tri_mod.name)
+                except Exception as e:
+                    print(f"[Asset Exporter] 三角化失败，已跳过：{e}")
 
             if props.export_textures:
                 extracted_images = set()
-                for slot in temp_obj.material_slots:
-                    mat = slot.material
-                    if mat and mat.use_nodes and mat.node_tree:
-                        for node in mat.node_tree.nodes:
-                            if node.type == "TEX_IMAGE" and node.image and node.image.name not in extracted_images:
-                                copy_or_extract_image(node.image, tex_dir)
-                                extracted_images.add(node.image.name)
+                for o in temp_objects:
+                    for slot in o.material_slots:
+                        mat = slot.material
+                        if mat and mat.use_nodes and mat.node_tree:
+                            for node in mat.node_tree.nodes:
+                                if node.type == "TEX_IMAGE" and node.image and node.image.name not in extracted_images:
+                                    copy_or_extract_image(node.image, tex_dir)
+                                    extracted_images.add(node.image.name)
 
             bpy.ops.object.select_all(action="DESELECT")
-            temp_obj.select_set(True)
-            context.view_layer.objects.active = temp_obj
+            for o in temp_objects:
+                o.select_set(True)
+            context.view_layer.objects.active = temp_objects[0]
 
+            # 导出顺序：GLB / Blend 须在 FBX 之前。FBX 会 strip 材质图像节点，否则 GLB 与 Blend 备份会丢贴图。
+            if props.export_glb:
+                glb_kwargs = collect_glb_kwargs()
+                glb_kwargs["filepath"] = glb_path
+                # 团队规范：统一导出 GLB，且仅导出选中对象。
+                glb_kwargs["export_format"] = "GLB"
+                glb_kwargs["use_selection"] = True
+                bpy.ops.export_scene.gltf(**glb_kwargs)
+            if props.export_blend:
+                export_selected_objects_to_blend(
+                    blend_path,
+                    list(temp_objects),
+                    scene_name=export_model_name,
+                    collection_name=source_collection_name,
+                )
             if props.export_fbx:
                 fbx_kwargs = collect_fbx_kwargs()
                 fbx_kwargs["filepath"] = fbx_path
@@ -999,30 +1282,18 @@ def run_export_pipeline(context, base_dir, reporter):
                 fbx_kwargs["path_mode"] = "STRIP"
                 if "embed_textures" in fbx_kwargs:
                     fbx_kwargs["embed_textures"] = False
-                # 关键：移除材质中的贴图节点，避免 FBX 记录贴图引用导致回导粉色。
-                strip_texture_links_for_fbx_export(temp_obj)
+                # 关键：移除材质中的贴图节点，避免 FBX 记录贴图引用导致回导粉色（须在 GLB / Blend 之后执行）。
+                for o in temp_objects:
+                    strip_texture_links_for_fbx_export(o)
                 bpy.ops.export_scene.fbx(**fbx_kwargs)
-            if props.export_glb:
-                glb_kwargs = collect_glb_kwargs()
-                glb_kwargs["filepath"] = glb_path
-                # 团队规范：统一导出 GLB，且仅导出选中对象。
-                glb_kwargs["export_format"] = "GLB"
-                glb_kwargs["use_selection"] = True
-                bpy.ops.export_scene.gltf(**glb_kwargs)
-
-            if props.export_blend:
-                export_selected_objects_to_blend(
-                    blend_path,
-                    [temp_obj],
-                    scene_name=export_model_name,
-                    collection_name=source_collection_name,
-                )
         finally:
             restore_reserved_object_names(renamed_pairs)
-            if temp_obj and temp_obj.name in bpy.data.objects:
+            to_remove = [o for o in temp_objects if o and o.name in bpy.data.objects]
+            if to_remove:
                 bpy.ops.object.select_all(action="DESELECT")
-                temp_obj.select_set(True)
-                context.view_layer.objects.active = temp_obj
+                for o in to_remove:
+                    o.select_set(True)
+                context.view_layer.objects.active = to_remove[0]
                 bpy.ops.object.delete()
 
         return {"name": export_model_name, "dir": model_dir}
