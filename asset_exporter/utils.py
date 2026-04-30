@@ -71,6 +71,33 @@ def collect_glb_kwargs():
     return _collect_operator_last_kwargs("export_scene.gltf", blocked_keys=GLB_BLOCKED_KEYS)
 
 
+def strip_texture_links_for_fbx_export(obj):
+    """
+    在导出副本上剥离贴图节点引用，确保 FBX 为“纯模型”输出。
+    仅处理副本对象，避免影响原场景材质。
+    """
+    if not obj or obj.type != "MESH":
+        return
+
+    for slot in obj.material_slots:
+        mat = slot.material
+        if not mat:
+            continue
+        # 复制一份材质再处理，防止改到原始材质数据块
+        mat_local = mat.copy()
+        slot.material = mat_local
+        if not (mat_local.use_nodes and mat_local.node_tree):
+            continue
+
+        nodes = mat_local.node_tree.nodes
+        tex_nodes = [n for n in nodes if n.type == "TEX_IMAGE"]
+        for node in tex_nodes:
+            try:
+                nodes.remove(node)
+            except Exception:
+                continue
+
+
 def get_selected_meshes(context):
     return [obj for obj in context.selected_objects if obj.type == "MESH"]
 
@@ -968,6 +995,12 @@ def run_export_pipeline(context, base_dir, reporter):
                 fbx_kwargs["use_selection"] = True
                 # 团队规范：仅导出网格，避免相机/灯光等混入。
                 fbx_kwargs["object_types"] = {"MESH"}
+                # 团队规范：FBX 仅导出纯模型，不写入贴图路径/嵌入贴图，后续由管线逻辑重链接。
+                fbx_kwargs["path_mode"] = "STRIP"
+                if "embed_textures" in fbx_kwargs:
+                    fbx_kwargs["embed_textures"] = False
+                # 关键：移除材质中的贴图节点，避免 FBX 记录贴图引用导致回导粉色。
+                strip_texture_links_for_fbx_export(temp_obj)
                 bpy.ops.export_scene.fbx(**fbx_kwargs)
             if props.export_glb:
                 glb_kwargs = collect_glb_kwargs()
