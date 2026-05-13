@@ -67,7 +67,7 @@ class ASSET_EXPORTER_V2_Properties(bpy.types.PropertyGroup):
     )
     export_check_json: bpy.props.BoolProperty(
         name="导出资产审查 JSON",
-        description="联动「资产审查助手」：与审查 CSV 同层级（objects/basic_info/checks），仅键名英文，便于开发读取",
+        description="联动「资产审查助手」：与顶栏「导出报告」的 JSON 相同（含 export_columns 与 rows，字段含 display_value）",
         default=True,
     )
     export_blend: bpy.props.BoolProperty(
