@@ -367,12 +367,19 @@ def write_basic_information_json(obj, json_path, model_file_path, export_texture
 
 
 def get_image_extension(img):
+    # file_format 反映实际内存中的数据格式（PBR 贴图助手转换后会更新），
+    # filepath 仅记录原始加载路径（转换后不会自动改扩展名），所以 file_format 优先。
+    fmt = getattr(img, "file_format", "")
+    if fmt:
+        ext = fmt.lower().replace("jpeg", "jpg")
+        if ext:
+            return ext
     filepath = img.filepath
     if filepath:
         _, ext = os.path.splitext(filepath)
         if ext:
             return ext.lower()
-    return getattr(img, "file_format", "PNG").lower().replace("jpeg", "jpg")
+    return "png"
 
 
 def copy_or_extract_image(img, target_dir):

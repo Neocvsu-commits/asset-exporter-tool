@@ -7,6 +7,43 @@ from .utils import (
 )
 
 
+def _draw_update_banner(layout):
+    """面板顶部：版本状态 + 刷新按钮。"""
+    try:
+        from .update_checker import get_update_info, get_check_status
+    except ImportError:
+        return
+
+    row = layout.row(align=True)
+    status = get_check_status("Neocvsu-commits", "asset-exporter-tool")
+    st = status.get("status", "pending")
+
+    if st == "checking":
+        row.label(text="正在检查更新...", icon="SORTTIME")
+    elif st == "error":
+        row.label(text=f"更新检查失败: {status.get('error', '未知错误')}", icon="CANCEL")
+    elif st == "no_release":
+        row.label(text="暂无可获取的 Release", icon="INFO")
+    elif st == "no_update" and status.get("current_version"):
+        row.label(text=f"已是最新版本 v{status['current_version']}", icon="CHECKMARK")
+    elif st == "pending":
+        row.label(text="等待更新检查...", icon="TIME")
+
+    row.operator("asset_exporter_v2.check_update", text="", icon="FILE_REFRESH")
+
+    info = get_update_info("Neocvsu-commits", "asset-exporter-tool")
+    if not info:
+        return
+    box = layout.box()
+    box.alert = True
+    col = box.column(align=True)
+    col.label(text=f" 当前版本: v{info['current_version']}", icon="INFO")
+    col.label(text=f" 最新版本: v{info['latest_version']}", icon="URL")
+    row = col.row(align=True)
+    row.operator("wm.url_open", text="查看 Release", icon="URL").url = info["html_url"]
+    row.operator("asset_exporter_v2.install_update", text="一键更新", icon="IMPORT")
+
+
 class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
     bl_label = "资产规范导出"
     bl_idname = "ASSET_EXPORTER_V2_PT_Panel"
@@ -16,6 +53,7 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        _draw_update_banner(layout)
         props = context.scene.asset_exporter_v2_props
         selected_meshes = get_selected_meshes(context)
         check_status = get_assets_check_status(context, selected_meshes)

@@ -1,4 +1,4 @@
-import os
+﻿import os
 import importlib
 
 import bpy
@@ -206,5 +206,52 @@ class ASSET_EXPORTER_V2_OT_OpenGLBAdvancedOptions(bpy.types.Operator):
         mod.export_panel_user_extension(context, layout)
 
     def execute(self, context):
-        self.report({"INFO"}, "GLB 参数已更新，将在“选择目录并导出”时生效")
+        self.report({"INFO"}, "GLB 参数已更新，将在\"选择目录并导出\"时生效")
+        return {"FINISHED"}
+
+
+class ASSET_EXPORTER_V2_OT_InstallUpdate(bpy.types.Operator):
+    bl_idname = "asset_exporter_v2.install_update"
+    bl_label = "下载并安装更新"
+    bl_description = "从 GitHub 下载最新版本并自动覆盖安装，需重启 Blender 生效"
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        try:
+            from .update_checker import install_update
+        except ImportError:
+            self.report({"ERROR"}, "更新模块不可用，请手动更新")
+            return {"CANCELLED"}
+
+        success, msg = install_update("Neocvsu-commits", "asset-exporter-tool")
+        if success:
+            self.report({"INFO"}, msg)
+        else:
+            self.report({"ERROR"}, msg)
+        return {"FINISHED"}
+
+
+class ASSET_EXPORTER_V2_OT_CheckUpdate(bpy.types.Operator):
+    bl_idname = "asset_exporter_v2.check_update"
+    bl_label = "检查更新"
+    bl_description = "立即检查 GitHub 是否有新版本发布"
+
+    def execute(self, context):
+        try:
+            from .update_checker import force_check_for_updates
+
+            force_check_for_updates(
+                "Neocvsu-commits",
+                "asset-exporter-tool",
+                (2, 3, 9),
+                os.path.dirname(os.path.dirname(__file__)),
+            )
+            self.report({"INFO"}, "已发起更新检查，请稍后查看面板顶部")
+        except ImportError:
+            self.report({"ERROR"}, "更新模块不可用")
+        except Exception as e:
+            self.report({"ERROR"}, f"检查失败: {e}")
         return {"FINISHED"}
