@@ -25,6 +25,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import urllib.request
 import urllib.error
 import zipfile
@@ -180,13 +181,27 @@ def install_update(owner, repo):
         tmp_dir = tempfile.mkdtemp(prefix="blender_addon_update_")
         zip_path = os.path.join(tmp_dir, "update.zip")
 
-        req = urllib.request.Request(
-            zip_url,
-            headers={"User-Agent": "Blender-Addon-Update-Checker"},
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            with open(zip_path, "wb") as f:
-                shutil.copyfileobj(resp, f)
+        # 重试逻辑：国内访问 GitHub 归档偶尔 504/超时，最多试 3 次，间隔递增
+        max_retries = 3
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                req = urllib.request.Request(
+                    zip_url,
+                    headers={"User-Agent": "Blender-Addon-Update-Checker"},
+                )
+                with urllib.request.urlopen(req, timeout=300) as resp:
+                    with open(zip_path, "wb") as f:
+                        shutil.copyfileobj(resp, f)
+                break
+            except urllib.error.HTTPError as e:
+                last_error = f"HTTP {e.code}: {e.reason}"
+            except Exception as e:
+                last_error = str(e)
+            if attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1))  # 2s, 4s
+        else:
+            return False, f"下载失败（已重试 {max_retries} 次）: {last_error}"
 
         extract_dir = os.path.join(tmp_dir, "extracted")
         with zipfile.ZipFile(zip_path, "r") as zf:
