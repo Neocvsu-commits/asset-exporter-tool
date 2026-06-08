@@ -226,7 +226,8 @@ class ASSET_EXPORTER_V2_OT_InstallUpdate(bpy.types.Operator):
             self.report({"ERROR"}, "更新模块不可用，请手动更新")
             return {"CANCELLED"}
 
-        success, msg = install_update("Neocvsu-commits", "asset-exporter-tool")
+        plugin_dir = os.path.dirname(__file__)
+        success, msg = install_update("Neocvsu-commits", "asset-exporter-tool", plugin_dir=plugin_dir)
         if success:
             self.report({"INFO"}, msg)
         else:
@@ -248,7 +249,7 @@ class ASSET_EXPORTER_V2_OT_CheckUpdate(bpy.types.Operator):
                 "Neocvsu-commits",
                 "asset-exporter-tool",
                 addon_bl_info["version"],
-                os.path.dirname(os.path.dirname(__file__)),
+                os.path.dirname(__file__),
             )
             self.report({"INFO"}, "已发起更新检查，请稍后查看面板顶部")
         except ImportError:

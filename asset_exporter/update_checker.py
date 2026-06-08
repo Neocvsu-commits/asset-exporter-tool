@@ -163,7 +163,7 @@ def get_check_status(owner, repo):
     }
 
 
-def install_update(owner, repo):
+def install_update(owner, repo, plugin_dir=None):
     """下载最新版 zip 并覆盖 plugin_dir 下文件。返回 (success, message)。"""
     repo_key = f"{owner}/{repo}"
     with _cache_lock:
@@ -172,8 +172,8 @@ def install_update(owner, repo):
         return False, "没有可用的更新信息，请先检查更新"
 
     zip_url = info.get("zip_url", "")
-    plugin_dir = info.get("plugin_dir", "")
-    if not zip_url or not plugin_dir:
+    effective_dir = plugin_dir or info.get("plugin_dir", "")
+    if not zip_url or not effective_dir:
         return False, "缺少下载地址或插件路径"
 
     tmp_dir = None
@@ -225,7 +225,7 @@ def install_update(owner, repo):
         # 覆盖插件目录
         for item in os.listdir(addon_src):
             src = os.path.join(addon_src, item)
-            dst = os.path.join(plugin_dir, item)
+            dst = os.path.join(effective_dir, item)
             if os.path.isdir(src):
                 if os.path.exists(dst):
                     shutil.rmtree(dst)
