@@ -229,7 +229,8 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
             text="匿名反馈",
             icon="COMMUNITY",
         ).url = "https://docs.qq.com/form/page/DTm5sVnJuTkpSbGZ5?templateId=25000&create_type=2&no_promotion=1&is_blank_or_template=blank#/fill"
-        feedback_box.label(
-            text="直接打开网页，无需登录注册",
-            icon="INFO",
-        )
+        fb_row.operator(
+            "wm.url_open",
+            text="作者主页",
+            icon="URL",
+        ).url = "https://github.com/Neocvsu-commits"
