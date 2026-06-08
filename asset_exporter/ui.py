@@ -230,9 +230,7 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
             icon="COMMUNITY",
         ).url = "https://docs.qq.com/form/page/DTm5sVnJuTkpSbGZ5?templateId=25000&create_type=2&no_promotion=1&is_blank_or_template=blank#/fill"
         fb_row2 = feedback_box.row()
-        fb_row2.scale_y = 1.5
-        fb_row2.operator(
-            "wm.url_open",
+        fb_row2.operator(            "wm.url_open",
             text="⭐ 作者主页（了解更多工具）",
             icon="URL",
         ).url = "https://github.com/Neocvsu-commits"
