@@ -242,11 +242,12 @@ class ASSET_EXPORTER_V2_OT_CheckUpdate(bpy.types.Operator):
     def execute(self, context):
         try:
             from .update_checker import force_check_for_updates
+            from . import bl_info as addon_bl_info
 
             force_check_for_updates(
                 "Neocvsu-commits",
                 "asset-exporter-tool",
-                (2, 3, 9),
+                addon_bl_info["version"],
                 os.path.dirname(os.path.dirname(__file__)),
             )
             self.report({"INFO"}, "已发起更新检查，请稍后查看面板顶部")
