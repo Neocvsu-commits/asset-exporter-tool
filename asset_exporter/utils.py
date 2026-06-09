@@ -837,7 +837,8 @@ def _row_object_name_v2(r):
 def _filter_v2_check_rows(rows, object_names, extra_aliases=None):
     """
     按当前导出选中物体名过滤检查行。若仅精确匹配会漏行（例如检查后改过物体名），则尝试：
-    额外别名（如导出主文件名）、大小写/首尾空白忽略；仍无匹配且结果里仅含单一物体时回落为该物体全部行。
+    额外别名（如导出主文件名）、大小写/首尾空白忽略；
+    仍无匹配时，若检查结果中的物体数量与请求数量一致（单/多物体均适用），回落为该物体全部行。
     """
     if not rows:
         return []
@@ -858,8 +859,8 @@ def _filter_v2_check_rows(rows, object_names, extra_aliases=None):
         return filtered
 
     distinct_row_objs = {norm(_row_object_name_v2(r)) for r in rows if _row_object_name_v2(r)}
-    if len(distinct_row_objs) == 1 and len(names) == 1:
-        # 单一物体检查结果与当前选中名不一致（常见：检查后改名），仍导出该批行
+    if len(distinct_row_objs) == len(names):
+        # 物体数量一致但名称有差异（常见：检查后改名），仍导出所有行
         return list(rows)
 
     return []
@@ -968,7 +969,8 @@ def _build_assets_check_v2_transposed_payload(context, filtered_rows):
     for oname in objects_order:
         obj = bpy.data.objects.get(oname)
         if obj and getattr(obj, "type", None) == "MESH" and obj.data:
-            basic_infos.append(str(len(obj.data.polygons)))
+            obj.data.calc_loop_triangles()
+            basic_infos.append(str(len(obj.data.loop_triangles)))
         else:
             basic_infos.append("")
 
@@ -1073,6 +1075,7 @@ def validate_export_request(context, props):
 
 
 def sanitize_optional_exports_by_availability(props, check_status, reporter=None):
+    """审查结果不可用时，仅警告不阻断（过滤层会兜底处理部分匹配）"""
     if (props.export_check_csv or props.export_check_json) and not check_status["all_selected_checked"]:
         if reporter:
             reporter.report({"WARNING"}, f"资产审查结果不可用，本次跳过审查 CSV/JSON：{check_status['reason']}")
