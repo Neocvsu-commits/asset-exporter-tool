@@ -366,11 +366,26 @@ def write_basic_information_json(obj, json_path, model_file_path, export_texture
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
+# Blender file_format → 标准文件扩展名（不含点）
+_FILE_FORMAT_EXT_MAP = {
+    "JPEG": "jpg",
+    "PNG": "png",
+    "TARGA": "tga",
+    "TARGA_RAW": "tga",
+    "TIFF": "tif",
+    "BMP": "bmp",
+    "OPEN_EXR": "exr",
+}
+
+
 def get_image_extension(img):
     # file_format 反映实际内存中的数据格式（PBR 贴图助手转换后会更新），
     # filepath 仅记录原始加载路径（转换后不会自动改扩展名），所以 file_format 优先。
     fmt = getattr(img, "file_format", "")
     if fmt:
+        ext = _FILE_FORMAT_EXT_MAP.get(fmt.upper())
+        if ext:
+            return ext
         ext = fmt.lower().replace("jpeg", "jpg")
         if ext:
             return ext
@@ -383,11 +398,16 @@ def get_image_extension(img):
 
 
 def copy_or_extract_image(img, target_dir):
-    img_name = img.name
     ext = get_image_extension(img)
+    if not ext.startswith("."):
+        ext = "." + ext
+
+    # 替换旧扩展名，而非追加（避免 T_KTWJ01_D.tga.targa 双后缀）
+    img_name = img.name
+    old_ext = os.path.splitext(img_name)[1].lower()
+    if old_ext and old_ext != ext and img_name.lower().endswith(old_ext):
+        img_name = img_name[: -len(old_ext)]
     if not img_name.lower().endswith(ext):
-        if not ext.startswith("."):
-            ext = "." + ext
         img_name += ext
 
     target_path = os.path.join(target_dir, img_name)
