@@ -1,4 +1,4 @@
-import bpy
+﻿import bpy
 import os
 import sys
 import csv
@@ -44,7 +44,7 @@ def sanitize_export_basename(name: str) -> str:
 def _collect_operator_last_kwargs(op_idname: str, blocked_keys=None):
     """
     收集 Blender 原生导出算子上一次设置的全部参数。
-    用于“更多参数”统一在一键导出阶段生效。
+    用于"更多参数"统一在一键导出阶段生效。
     """
     blocked = set(blocked_keys or set())
     wm = bpy.context.window_manager
@@ -73,7 +73,7 @@ def collect_glb_kwargs():
 
 def strip_texture_links_for_fbx_export(obj):
     """
-    在导出副本上剥离贴图节点引用，确保 FBX 为“纯模型”输出。
+    在导出副本上剥离贴图节点引用，确保 FBX 为"纯模型"输出。
     仅处理副本对象，避免影响原场景材质。
     """
     if not obj or obj.type != "MESH":
@@ -96,6 +96,169 @@ def strip_texture_links_for_fbx_export(obj):
                 nodes.remove(node)
             except Exception:
                 continue
+
+
+def _image_can_be_copied_for_gltf(img):
+    """判断图像是否能通过 glTF 导出器的 copy() + update() 流程。
+
+    glTF 导出器 make_temp_image_copy 内部先 copy() 再 update()，
+    update() 需要 packed_file 或磁盘源文件存在，否则抛 RuntimeError。
+    """
+    if not img:
+        return False
+    if getattr(img, "packed_file", None) is not None:
+        return True
+    # 有像素数据就可以 copy+update（GENERATED 类型）
+    if getattr(img, "has_data", False):
+        return True
+    source = getattr(img, "source", "")
+    if source == 'FILE':
+        filepath = getattr(img, "filepath", "")
+        if filepath:
+            abs_path = bpy.path.abspath(filepath)
+            if os.path.isfile(abs_path):
+                return True
+    return False
+
+
+def _find_original_image(img, object_label=""):
+    """查找与空壳图像对应的有效像素数据块。
+
+    .001 编号有两种成因：
+    A) PBR 贴图助手 _force_claim_name 改名冲突 → raw_name 是原始目标名
+    B) Blender 材质复制 → 搜索 bpy.data.images 中不含 .NNN 的 base_name
+
+    优先匹配 object_label（导出的材质通常以此开头），
+    避免同名图像属于其他物体时被错误匹配。
+    返回 (valid_image, reason) 或 (None, reason)。
+    """
+    import re
+    name = img.name if img else ""
+    m = re.match(r"^(.+)\.(\d{3})$", name)
+    if not m:
+        return None, "名称不含 .NNN 编号"
+    base_name = m.group(1)
+
+    # 策略 A：PBR 贴图助手的 raw_name 陷阱
+    #   如果空壳的 filepath 不存在且 object_label 可以推导出目标名，
+    #   优先匹配当前物体的同名贴图。
+    if object_label:
+        label_no_sm = object_label[3:] if object_label.upper().startswith("SM_") else object_label
+        # 从 node 的连线和材质用法推断 suffix，匹配 {T_}{label}{suffix}.{ext}
+        # 最宽松策略：搜索所有 has_data=True、filepath 有效、名称不以 .NNN 结尾的图像，
+        #   选择名称与当前物体前缀匹配的。
+        candidates = []
+        for candidate in bpy.data.images:
+            if candidate == img or not getattr(candidate, "has_data", False):
+                continue
+            if re.search(r"\.\d{3}$", candidate.name):
+                continue
+            cfp = bpy.path.abspath(getattr(candidate, "filepath", "") or "")
+            if cfp and not os.path.isfile(cfp):
+                continue
+            # 文件名核心部分提取
+            c_base = os.path.splitext(candidate.name)[0]
+            if c_base.upper().startswith("T_"):
+                c_core = c_base[2:]
+            else:
+                c_core = c_base
+            candidates.append((candidate, c_core.upper()))
+
+        # 匹配：核心名包含物体 core name 的
+        core_upper = label_no_sm.upper()
+        candidates.sort(key=lambda x: (x[1] == core_upper, len(x[1])), reverse=True)
+        if candidates:
+            return candidates[0][0], "按物体名前缀匹配"
+
+    # 策略 B：精确 base_name 查找
+    original = bpy.data.images.get(base_name)
+    if original and original != img and getattr(original, "has_data", False):
+        return original, "base_name 精确匹配"
+    for candidate in bpy.data.images:
+        if candidate != img and candidate.name == base_name and getattr(candidate, "has_data", False):
+            return candidate, "base_name 遍历匹配"
+
+    return None, f"未找到 {base_name} 的有效像素数据块"
+
+
+def strip_empty_image_nodes(obj, object_label=""):
+    """
+    GLB 导出前修复临时副本材质中引用图像的节点。
+
+    PBR 贴图助手改格式/重命名后可能残留 .001 空壳数据块，
+    glTF 导出器 make_temp_image_copy → copy() → update() 会崩。
+
+    策略：
+    1. .NNN 无像素图像 → 替换为有效同名图像（按物体名前缀匹配）
+    2. 找不到有效图像的 → 通过 packed 重新生成像素作为兜底
+    3. 无法修复 → 移除节点
+
+    仅处理副本对象，不影响原场景材质。
+    """
+    if not obj or obj.type != "MESH":
+        return 0
+
+    total_fixed = 0
+    for slot in obj.material_slots:
+        mat = slot.material
+        if not mat:
+            continue
+        mat_local = mat.copy()
+        slot.material = mat_local
+        if not (mat_local.use_nodes and mat_local.node_tree):
+            continue
+
+        nodes = mat_local.node_tree.nodes
+        to_fix = []  # 待修复的 .NNN 节点
+        to_remove = []  # 无法修复的
+
+        for node in nodes:
+            if node.type != "TEX_IMAGE":
+                continue
+            img = getattr(node, "image", None)
+            if not img:
+                to_remove.append(node)
+                continue
+
+            if _image_can_be_copied_for_gltf(img):
+                continue
+
+            # 尝试找到有效原始图像
+            valid_img, reason = _find_original_image(img, object_label)
+            if valid_img:
+                try:
+                    node.image = valid_img
+                    total_fixed += 1
+                    print(f"[Asset Exporter] GLB 修复: {img.name} → {valid_img.name} ({reason})")
+                    continue
+                except Exception:
+                    pass
+
+            # 兜底：通过 packed_file 方式修复
+            # 如果能找到源文件，pack 它然后再 unpack 到临时副本
+            filepath = getattr(img, "filepath", "")
+            if filepath and os.path.isfile(bpy.path.abspath(filepath)):
+                try:
+                    img.pack()
+                    # packed 后直接可用，不需要额外处理
+                    total_fixed += 1
+                    print(f"[Asset Exporter] GLB 修复: {img.name} packed")
+                    continue
+                except Exception:
+                    pass
+
+            # 实在无法修复 → 移除
+            to_remove.append(node)
+
+        for node in to_remove:
+            try:
+                nodes.remove(node)
+                total_fixed += 1
+                print(f"[Asset Exporter] GLB 移除空图像节点: {getattr(node, 'image', None) and node.image.name or '无图像'}")
+            except Exception:
+                continue
+
+    return total_fixed
 
 
 def get_selected_meshes(context):
@@ -293,7 +456,7 @@ def _build_basic_information_rows(obj, model_file_path, export_textures, asset_c
     dimensions = obj.dimensions
     asset_name = asset_name_override or obj.name
     is_rigged, has_animation, animation_types = get_animation_and_rig_status(obj)
-    animation_types_csv = "无" if not has_animation else " | ".join(animation_types)
+    animation_types_csv = '无' if not has_animation else " | ".join(animation_types)
 
     excel_safe_forward_axis = forward_axis
     if forward_axis in ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]:
@@ -308,7 +471,7 @@ def _build_basic_information_rows(obj, model_file_path, export_textures, asset_c
         {"field_key": "dimension_z_m", "field_label_cn": "尺寸 Z", "value": f"{dimensions.z:.3f}", "status": "INFO", "note": "单位：米 (m)"},
         {"field_key": "triangle_count", "field_label_cn": "三角面数", "value": str(tri_count), "status": "INFO", "note": "多物体汇总三角面数量 (Tris)" if len(meshes) > 1 else "当前网格的三角面数量 (Tris)"},
         {"field_key": "material_count", "field_label_cn": "材质球数量", "value": str(len(material_names)), "status": "INFO", "note": "有效材质槽统计（多物体时去重）"},
-        {"field_key": "material_names", "field_label_cn": "材质球名称", "value": " | ".join(material_names) if material_names else "无", "status": "INFO", "note": "材质列表（多物体时去重）"},
+        {"field_key": "material_names", "field_label_cn": "材质球名称", "value": " | ".join(material_names) if material_names else '无', "status": "INFO", "note": "材质列表（多物体时去重）"},
         {"field_key": "export_textures_enabled", "field_label_cn": "贴图导出开关", "value": "开启" if export_textures else "关闭", "status": "INFO", "note": "来自插件导出选项"},
         {"field_key": "texture_count", "field_label_cn": "贴图数量", "value": str(len(texture_details)), "status": "INFO", "note": "唯一贴图节点统计"},
         {"field_key": "location_zero_check", "field_label_cn": "位置归零检查", "value": "未归零" if has_loc else "已归零", "status": "WARNING" if has_loc else "PASS", "note": "导出时会自动修复"},
@@ -316,7 +479,7 @@ def _build_basic_information_rows(obj, model_file_path, export_textures, asset_c
         {"field_key": "scale_unify_check", "field_label_cn": "缩放归一检查", "value": "未归一" if has_scale else "已归一", "status": "WARNING" if has_scale else "PASS", "note": "导出时会自动修复"},
         {"field_key": "is_rigged", "field_label_cn": "是否绑定骨骼", "value": "是" if is_rigged else "否", "status": "INFO", "note": "检测 ARMATURE 修改器或父级为骨骼对象"},
         {"field_key": "has_animation", "field_label_cn": "是否包含动画", "value": "是" if has_animation else "否", "status": "INFO", "note": "检测骨骼动画与形态键动画"},
-        {"field_key": "animation_types", "field_label_cn": "动画类型", "value": animation_types_csv, "status": "INFO", "note": "骨骼动画 | 形态键动画；无则为“无”"},
+        {"field_key": "animation_types", "field_label_cn": "动画类型", "value": animation_types_csv, "status": "INFO", "note": "骨骼动画 | 形态键动画；无则为'无'"},
         {"field_key": "forward_axis", "field_label_cn": "模型正前方向", "value": excel_safe_forward_axis, "status": "INFO", "note": "来自导出界面的辅助箭头标记"},
         {"field_key": "global_rotation_quaternion_wxyz", "field_label_cn": "全局旋转四元数", "value": str(_normalize_basic_info_global_quat(global_quat)), "status": "INFO", "note": "[W, X, Y, Z] 格式 (从世界矩阵提取)"},
     ]
@@ -325,7 +488,7 @@ def _build_basic_information_rows(obj, model_file_path, export_textures, asset_c
         for idx, (img_name, resolution, source_path) in enumerate(texture_details, start=1):
             rows.append({"field_key": f"texture_detail_{idx:03d}", "field_label_cn": "贴图详情", "value": img_name, "status": "INFO", "note": f"{resolution} | {source_path}"})
     else:
-        rows.append({"field_key": "texture_detail_001", "field_label_cn": "贴图详情", "value": "无", "status": "INFO", "note": "当前对象未检测到贴图节点"})
+        rows.append({"field_key": "texture_detail_001", "field_label_cn": "贴图详情", "value": '无', "status": "INFO", "note": "当前对象未检测到贴图节点"})
 
     return rows
 
@@ -377,27 +540,137 @@ _FILE_FORMAT_EXT_MAP = {
     "OPEN_EXR": "exr",
 }
 
+_EXT_TO_FILE_FORMAT = {
+    ".jpg": "JPEG",
+    ".jpeg": "JPEG",
+    ".png": "PNG",
+    ".tga": "TARGA",
+    ".tif": "TIFF",
+    ".tiff": "TIFF",
+    ".bmp": "BMP",
+    ".exr": "OPEN_EXR",
+}
+
+
+def _normalize_image_ext(ext):
+    if not ext:
+        return ""
+    ext = ext.lower().lstrip(".")
+    return "jpg" if ext == "jpeg" else ext
+
 
 def get_image_extension(img):
-    # file_format 反映实际内存中的数据格式（PBR 贴图助手转换后会更新），
-    # filepath 仅记录原始加载路径（转换后不会自动改扩展名），所以 file_format 优先。
+    fmt_ext = ""
     fmt = getattr(img, "file_format", "")
     if fmt:
-        ext = _FILE_FORMAT_EXT_MAP.get(fmt.upper())
-        if ext:
-            return ext
-        ext = fmt.lower().replace("jpeg", "jpg")
-        if ext:
-            return ext
+        fmt_ext = _FILE_FORMAT_EXT_MAP.get(fmt.upper(), "")
+        if not fmt_ext:
+            fmt_ext = _normalize_image_ext(fmt)
+
+    name_ext = ""
+    name = getattr(img, "name", "")
+    if name:
+        name_ext = _normalize_image_ext(os.path.splitext(name)[1])
+
+    # 格式转换后 Image 名称已改为 .jpg，但 packed 内 file_format 可能仍是 PNG
+    if name_ext and fmt_ext and name_ext != fmt_ext:
+        return name_ext
+    if fmt_ext:
+        return fmt_ext
+    if name_ext:
+        return name_ext
+
     filepath = img.filepath
     if filepath:
-        _, ext = os.path.splitext(filepath)
-        if ext:
-            return ext.lower()
+        return _normalize_image_ext(os.path.splitext(filepath)[1]) or "png"
     return "png"
 
 
-def copy_or_extract_image(img, target_dir):
+def _ensure_image_pixels_for_export(img):
+    if not img or img.size[0] <= 0 or img.size[1] <= 0:
+        if getattr(img, "packed_file", None):
+            try:
+                img.reload()
+            except Exception:
+                pass
+    return img and img.size[0] > 0 and img.size[1] > 0
+
+
+def _write_image_memory_to_path(img, target_path, scene=None):
+    if not _ensure_image_pixels_for_export(img):
+        packed = getattr(img, "packed_file", None)
+        if packed and packed.data:
+            try:
+                with open(target_path, "wb") as f:
+                    f.write(packed.data)
+                return os.path.getsize(target_path) > 0
+            except Exception as e:
+                print(f"[Asset Exporter] 写出 packed 字节失败 {getattr(img, 'name', '?')}: {e}")
+        return False
+
+    ext = os.path.splitext(target_path)[1].lower()
+    target_fmt = _EXT_TO_FILE_FORMAT.get(ext)
+    old_fmt = getattr(img, "file_format", None)
+    try:
+        if target_fmt:
+            img.file_format = target_fmt
+        img.save_render(target_path, scene=scene)
+        if os.path.isfile(target_path) and os.path.getsize(target_path) > 0:
+            return True
+    except Exception as e:
+        print(f"[Asset Exporter] save_render 写出失败 {getattr(img, 'name', '?')}: {e}")
+    finally:
+        if old_fmt is not None:
+            try:
+                img.file_format = old_fmt
+            except Exception:
+                pass
+
+    packed = getattr(img, "packed_file", None)
+    if packed and packed.data:
+        try:
+            with open(target_path, "wb") as f:
+                f.write(packed.data)
+            return os.path.getsize(target_path) > 0
+        except Exception as e:
+            print(f"[Asset Exporter] packed 兜底写出失败 {getattr(img, 'name', '?')}: {e}")
+    return False
+
+
+def _image_has_memory_pixels(img):
+    if not img:
+        return False
+    if img.size[0] <= 0 or img.size[1] <= 0:
+        return False
+    return bool(getattr(img, "has_data", False) or getattr(img, "packed_file", None))
+
+
+def _should_export_from_memory(img):
+    """内存像素与磁盘路径不一致时，必须从内存写出（缩放/格式转换后常见）。"""
+    if not _image_has_memory_pixels(img):
+        return False
+    if getattr(img, "packed_file", None):
+        return True
+    if img.get("_pbr_unsynced_resize"):
+        return True
+
+    name_ext = _normalize_image_ext(os.path.splitext(getattr(img, "name", ""))[1])
+    fmt = getattr(img, "file_format", "")
+    raw_fmt_ext = _FILE_FORMAT_EXT_MAP.get(fmt.upper(), "") if fmt else ""
+    if not raw_fmt_ext and fmt:
+        raw_fmt_ext = _normalize_image_ext(fmt)
+    if name_ext and raw_fmt_ext and name_ext != raw_fmt_ext:
+        return True
+
+    export_ext = get_image_extension(img)
+    fp = bpy.path.abspath(getattr(img, "filepath", "") or "")
+    if not fp:
+        return True
+    disk_ext = _normalize_image_ext(os.path.splitext(fp)[1])
+    return bool(disk_ext and export_ext and disk_ext != export_ext)
+
+
+def copy_or_extract_image(img, target_dir, scene=None):
     ext = get_image_extension(img)
     if not ext.startswith("."):
         ext = "." + ext
@@ -414,31 +687,18 @@ def copy_or_extract_image(img, target_dir):
     if os.path.exists(target_path):
         return target_path
 
-    if img.packed_file:
-        orig_path = img.filepath
+    if _should_export_from_memory(img):
+        if _write_image_memory_to_path(img, target_path, scene=scene):
+            return target_path
+
+    abs_path = bpy.path.abspath(img.filepath)
+    if os.path.exists(abs_path):
         try:
-            img.filepath_raw = target_path
-            img.save()
+            shutil.copy2(abs_path, target_path)
         except Exception:
             pass
-        finally:
-            img.filepath_raw = orig_path
-    else:
-        abs_path = bpy.path.abspath(img.filepath)
-        if os.path.exists(abs_path):
-            try:
-                shutil.copy2(abs_path, target_path)
-            except Exception:
-                pass
-        elif getattr(img, "has_data", False):
-            orig_path = img.filepath
-            try:
-                img.filepath_raw = target_path
-                img.save()
-            except Exception:
-                pass
-            finally:
-                img.filepath_raw = orig_path
+    elif _image_has_memory_pixels(img):
+        _write_image_memory_to_path(img, target_path, scene=scene)
     return target_path
 
 
@@ -1228,7 +1488,7 @@ def run_export_pipeline(context, base_dir, reporter):
                     all_mesh_objects=report_meshes,
                 )
             # 资产审查联动：任何异常都不应阻止模型正常导出，只给出警告并跳过
-            # v2 下即便“未完全覆盖选中对象”，也允许导出当前可匹配到的结果（含空结构文件）。
+            # v2 下即便"未完全覆盖选中对象"，也允许导出当前可匹配到的结果（含空结构文件）。
             can_try_export_check = check_status.get("backend") in {"v2", "v1"}
             if (props.export_check_csv or props.export_check_json) and can_try_export_check:
                 try:
@@ -1278,7 +1538,7 @@ def run_export_pipeline(context, base_dir, reporter):
                         if mat and mat.use_nodes and mat.node_tree:
                             for node in mat.node_tree.nodes:
                                 if node.type == "TEX_IMAGE" and node.image and node.image.name not in extracted_images:
-                                    copy_or_extract_image(node.image, tex_dir)
+                                    copy_or_extract_image(node.image, tex_dir, scene=context.scene)
                                     extracted_images.add(node.image.name)
 
             bpy.ops.object.select_all(action="DESELECT")
@@ -1288,6 +1548,13 @@ def run_export_pipeline(context, base_dir, reporter):
 
             # 导出顺序：GLB / Blend 须在 FBX 之前。FBX 会 strip 材质图像节点，否则 GLB 与 Blend 备份会丢贴图。
             if props.export_glb:
+                # GLB 导出前修复空图像节点：
+                # PBR 贴图助手改格式/重命名后可能残留 .001 空壳数据块，
+                # glTF 导出器 make_temp_image_copy → copy() → update() 会崩。
+                for o in temp_objects:
+                    fixed = strip_empty_image_nodes(o, object_label=export_model_name)
+                    if fixed:
+                        print(f"[Asset Exporter] GLB 导出前修复 {o.name}：{fixed} 个图像节点")
                 glb_kwargs = collect_glb_kwargs()
                 glb_kwargs["filepath"] = glb_path
                 # 团队规范：统一导出 GLB，且仅导出选中对象。
