@@ -71,6 +71,47 @@ def collect_glb_kwargs():
     return _collect_operator_last_kwargs("export_scene.gltf", blocked_keys=GLB_BLOCKED_KEYS)
 
 
+def _force_clean_material_name(mat_copy, original_mat_name, obj_name):
+    """恢复材质副本的名称，清除 Blender 自动追加的 .NNN 后缀。
+
+    mat.copy() + slot.material = mat_local 后，因为副本名 = 原名，
+    Blender 检测到 bpy.data.materials 中已有同名数据块时会追加 .001/.002/.003。
+    这个函数驱逐占位者恢复干净名称，导出的 GLB/FBX/BLEND 不带 .NNN 后缀。
+    """
+    target = original_mat_name or mat_copy.name.split(".")[0]
+    # 移除 Blender 自动追加的 .NNN
+    clean = target.split(".")[0]
+    if mat_copy.name == clean:
+        return  # 已经是干净的，无需改
+    _force_claim_name_for_datablock(bpy.data.materials, mat_copy, clean)
+
+
+def _force_claim_name_for_datablock(data_collection, block, target_name):
+    """循环驱逐同名占位者，设 block.name = target_name。"""
+    if not block or not target_name or block.name == target_name:
+        return
+    counter = 1
+    while counter <= 100:
+        existing = data_collection.get(target_name)
+        if not existing or existing == block:
+            break
+        backup = f"{target_name}_{counter}"
+        while backup in data_collection and counter <= 100:
+            counter += 1
+            backup = f"{target_name}_{counter}"
+        if counter > 100:
+            break
+        try:
+            existing.name = backup
+        except Exception:
+            pass
+        counter += 1
+    try:
+        block.name = target_name
+    except Exception:
+        pass
+
+
 def strip_texture_links_for_fbx_export(obj):
     """
     在导出副本上剥离贴图节点引用，确保 FBX 为"纯模型"输出。
@@ -85,6 +126,7 @@ def strip_texture_links_for_fbx_export(obj):
             continue
         # 复制一份材质再处理，防止改到原始材质数据块
         mat_local = mat.copy()
+        _force_clean_material_name(mat_local, mat.name, obj.name)
         slot.material = mat_local
         if not (mat_local.use_nodes and mat_local.node_tree):
             continue
@@ -204,6 +246,7 @@ def strip_empty_image_nodes(obj, object_label=""):
         if not mat:
             continue
         mat_local = mat.copy()
+        _force_clean_material_name(mat_local, mat.name, obj.name)
         slot.material = mat_local
         if not (mat_local.use_nodes and mat_local.node_tree):
             continue
@@ -1457,6 +1500,21 @@ def run_export_pipeline(context, base_dir, reporter):
         else:
             # 合并导出：一个 FBX/GLB 内保留多个独立物体，物体名与选中源一致
             renamed_pairs = sync_copy_names_from_sources(source_objects, temp_objects)
+
+        # 清除 Blender duplicate 自动追加的 .NNN 后缀（mesh data 和 material）
+        for o in temp_objects:
+            if o.data and "." in o.data.name:
+                _force_claim_name_for_datablock(
+                    bpy.data.meshes, o.data,
+                    o.data.name.split(".")[0]
+                )
+            for slot in o.material_slots:
+                mat = slot.material
+                if mat and "." in mat.name:
+                    _force_claim_name_for_datablock(
+                        bpy.data.materials, mat,
+                        mat.name.split(".")[0]
+                    )
 
         temp_obj = temp_objects[0]
 
