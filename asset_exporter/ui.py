@@ -144,8 +144,7 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
         # ---- GLB 快捷设置 ----
         if props.export_glb:
             glb_row = format_box.row(align=True)
-            icon = "MOD_DECIM" if props.glb_draco_compression else "SORT_SIZE"
-            glb_row.prop(props, "glb_draco_compression", icon=icon)
+            glb_row.prop(props, "glb_draco_compression")
             glb_row.prop(props, "glb_image_format", text="贴图")
 
         forward_box = layout.box()
