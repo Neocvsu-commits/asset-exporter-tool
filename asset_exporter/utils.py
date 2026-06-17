@@ -1619,7 +1619,7 @@ def run_export_pipeline(context, base_dir, reporter):
                 glb_kwargs["export_format"] = "GLB"
                 glb_kwargs["use_selection"] = True
                 # 面板快捷设置强制覆写（覆盖弹窗残留值）
-                glb_kwargs["export_draco_mesh_compression"] = props.glb_draco_compression
+                glb_kwargs["export_draco"] = props.glb_draco_compression
                 glb_kwargs["export_image_format"] = props.glb_image_format
                 bpy.ops.export_scene.gltf(**glb_kwargs)
             if props.export_blend:
