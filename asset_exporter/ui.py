@@ -143,21 +143,10 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
 
         # ---- GLB 快捷设置 ----
         if props.export_glb:
-            glb_quick = format_box.box()
-            glb_quick.enabled = props.export_glb
-            # 压缩状态指示行
-            status_row = glb_quick.row(align=True)
-            draco_on = props.glb_draco_compression
-            if draco_on:
-                status_row.label(text="", icon="CHECKMARK")
-                status_row.label(text="GLB 已启用 Draco 压缩", icon="MOD_DECIM")
-            else:
-                status_row.label(text="", icon="INFO")
-                status_row.label(text="GLB 未压缩（体积较大）", icon="SORT_SIZE")
-            # 快捷开关行
-            switch_row = glb_quick.row(align=True)
-            switch_row.prop(props, "glb_draco_compression")
-            switch_row.prop(props, "glb_image_format", text="贴图")
+            glb_row = format_box.row(align=True)
+            icon = "MOD_DECIM" if props.glb_draco_compression else "SORT_SIZE"
+            glb_row.prop(props, "glb_draco_compression", icon=icon)
+            glb_row.prop(props, "glb_image_format", text="贴图")
 
         forward_box = layout.box()
         forward_box.label(text="定义模型正前方向（在模型原点生成参考箭头）", icon="ORIENTATION_GLOBAL")
