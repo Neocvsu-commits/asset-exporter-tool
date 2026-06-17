@@ -185,7 +185,7 @@ class ASSET_EXPORTER_V2_OT_OpenGLBAdvancedOptions(bpy.types.Operator):
     def _sync_panel_to_operator(op_props, props):
         """面板属性 → Blender 原生 glTF 导出属性（打开弹窗时同步）。"""
         mapping = {
-            "glb_draco_compression": "export_draco",
+            "glb_draco_compression": "export_draco_mesh_compression_enable",
             "glb_image_format": "export_image_format",
         }
         for panel_key, op_key in mapping.items():
@@ -198,7 +198,7 @@ class ASSET_EXPORTER_V2_OT_OpenGLBAdvancedOptions(bpy.types.Operator):
     def _sync_operator_to_panel(op_props, props):
         """Blender 原生 glTF 导出属性 → 面板属性（关闭弹窗时同步）。"""
         mapping = {
-            "export_draco": "glb_draco_compression",
+            "export_draco_mesh_compression_enable": "glb_draco_compression",
             "export_image_format": "glb_image_format",
         }
         for op_key, panel_key in mapping.items():
