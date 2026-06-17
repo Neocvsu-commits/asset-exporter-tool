@@ -101,3 +101,20 @@ class ASSET_EXPORTER_V2_Properties(bpy.types.PropertyGroup):
         default="",
         subtype="DIR_PATH",
     )
+    # ---- GLB 快捷设置 ----
+    glb_image_format: bpy.props.EnumProperty(
+        name="GLB 贴图格式",
+        description="GLB 导出时贴图的编码格式（JPEG 压缩率高、体积小；PNG 无损）",
+        items=[
+            ("JPEG", "JPEG", "JPEG 有损压缩，体积小"),
+            ("PNG", "PNG", "PNG 无损，保留透明通道"),
+            ("AUTO", "自动", "Blender 自动决定"),
+            ("WEBP", "WebP", "WebP 格式"),
+        ],
+        default="JPEG",
+    )
+    glb_draco_compression: bpy.props.BoolProperty(
+        name="GLB Draco 压缩",
+        description="启用 Draco 网格压缩可大幅减小 GLB 体积（接收端需支持 Draco 解码）",
+        default=False,
+    )

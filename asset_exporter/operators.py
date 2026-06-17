@@ -173,6 +173,7 @@ class ASSET_EXPORTER_V2_OT_OpenGLBAdvancedOptions(bpy.types.Operator):
             "export_materials": "EXPORT",
             "export_animations": True,
             "export_yup": True,
+            "export_image_format": "JPEG",
         }
         for key, value in defaults.items():
             try:
@@ -180,9 +181,38 @@ class ASSET_EXPORTER_V2_OT_OpenGLBAdvancedOptions(bpy.types.Operator):
             except Exception:
                 continue
 
+    @staticmethod
+    def _sync_panel_to_operator(op_props, props):
+        """面板属性 → Blender 原生 glTF 导出属性（打开弹窗时同步）。"""
+        mapping = {
+            "glb_draco_compression": "export_draco_mesh_compression",
+            "glb_image_format": "export_image_format",
+        }
+        for panel_key, op_key in mapping.items():
+            try:
+                setattr(op_props, op_key, getattr(props, panel_key))
+            except Exception:
+                continue
+
+    @staticmethod
+    def _sync_operator_to_panel(op_props, props):
+        """Blender 原生 glTF 导出属性 → 面板属性（关闭弹窗时同步）。"""
+        mapping = {
+            "export_draco_mesh_compression": "glb_draco_compression",
+            "export_image_format": "glb_image_format",
+        }
+        for op_key, panel_key in mapping.items():
+            try:
+                setattr(props, panel_key, getattr(op_props, op_key))
+            except Exception:
+                continue
+
     def invoke(self, context, event):
         op_props = context.window_manager.operator_properties_last("export_scene.gltf")
         self._apply_recommended_defaults(op_props)
+        # GLB 弹窗打开时：如果面板有覆写值（已经调过开关），面板优先
+        props = context.scene.asset_exporter_v2_props
+        self._sync_panel_to_operator(op_props, props)
         return context.window_manager.invoke_props_dialog(self, width=560)
 
     def draw(self, context):
@@ -206,6 +236,10 @@ class ASSET_EXPORTER_V2_OT_OpenGLBAdvancedOptions(bpy.types.Operator):
         mod.export_panel_user_extension(context, layout)
 
     def execute(self, context):
+        # 弹窗关闭时同步原生属性 → 面板
+        props = context.scene.asset_exporter_v2_props
+        op_props = context.window_manager.operator_properties_last("export_scene.gltf")
+        self._sync_operator_to_panel(op_props, props)
         self.report({"INFO"}, "GLB 参数已更新，将在\"选择目录并导出\"时生效")
         return {"FINISHED"}
 
