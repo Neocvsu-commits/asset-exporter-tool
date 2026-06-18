@@ -1495,6 +1495,22 @@ def run_export_pipeline(context, base_dir, reporter):
             raise RuntimeError("复制结果与选中网格数量不一致，请重试导出")
 
         temp_objects = copied_objects
+
+        # 快照源物体引用的网格数据块和材质数据块原始名称。
+        # 导出流程中 _force_claim_name_for_datablock 和 strip_* 系列函数
+        # 会抢占这些名称给副本，结束时副本被删除但原名未恢复，
+        # 导致原档数据块残留 .NNN/_N 后缀。此处记录旧名，finally 恢复。
+        _original_mesh_blocks = {}
+        _original_material_blocks = {}
+        for _src_obj in source_objects:
+            _md = _src_obj.data
+            if _md and _md.name not in _original_mesh_blocks:
+                _original_mesh_blocks[_md.name] = _md
+            for _slot in _src_obj.material_slots:
+                _mat = _slot.material
+                if _mat and _mat.name not in _original_material_blocks:
+                    _original_material_blocks[_mat.name] = _mat
+
         if len(source_objects) == 1:
             renamed_pairs = reserve_object_name_for_export(temp_objects[0], export_model_name)
         else:
@@ -1653,6 +1669,23 @@ def run_export_pipeline(context, base_dir, reporter):
                     o.select_set(True)
                 context.view_layer.objects.active = to_remove[0]
                 bpy.ops.object.delete()
+
+            # 恢复原始数据块名称。
+            # 导出流程中 _force_claim_name_for_datablock / strip_* 系列函数
+            # 可能把原档 mesh/material 改名以给副本腾出干净名称；
+            # 副本已删除，此时再把生效的数据块名恢复回去。
+            for _old_name, _md in _original_mesh_blocks.items():
+                try:
+                    if _md and _md.name in bpy.data.meshes and _md.name != _old_name:
+                        _force_claim_name_for_datablock(bpy.data.meshes, _md, _old_name)
+                except Exception:
+                    pass
+            for _old_name, _mat in _original_material_blocks.items():
+                try:
+                    if _mat and _mat.name in bpy.data.materials and _mat.name != _old_name:
+                        _force_claim_name_for_datablock(bpy.data.materials, _mat, _old_name)
+                except Exception:
+                    pass
 
         return {"name": export_model_name, "dir": model_dir}
 
