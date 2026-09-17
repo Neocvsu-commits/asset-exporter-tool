@@ -53,7 +53,6 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        _draw_update_banner(layout)
         props = context.scene.asset_exporter_v2_props
         selected_meshes = get_selected_meshes(context)
         check_status = get_assets_check_status(context, selected_meshes)
@@ -220,23 +219,27 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
             icon="FILE_FOLDER",
         )
 
-        # ---- 反馈入口 ----
-        layout.separator()
-        feedback_box = layout.box()
-        feedback_box.label(text="反馈 & 支持", icon="HELP")
-        fb_row = feedback_box.row(align=True)
-        fb_row.operator(
-            "wm.url_open",
-            text="Bug / 功能建议",
-            icon="GHOST_ENABLED",
-        ).url = "https://github.com/Neocvsu-commits/asset-exporter-tool/issues/new"
-        fb_row.operator(
-            "wm.url_open",
-            text="匿名反馈",
-            icon="COMMUNITY",
-        ).url = "https://docs.qq.com/form/page/DTm5sVnJuTkpSbGZ5?templateId=25000&create_type=2&no_promotion=1&is_blank_or_template=blank#/fill"
-        fb_row2 = feedback_box.row()
-        fb_row2.operator(            "wm.url_open",
-            text="⭐ 作者主页（了解更多工具）",
-            icon="URL",
-        ).url = "https://github.com/Neocvsu-commits"
+
+
+def draw_support_preferences(layout):
+    _draw_update_banner(layout)
+    layout.separator()
+    feedback_box = layout.box()
+    feedback_box.label(text="反馈 & 支持", icon="HELP")
+    fb_row = feedback_box.row(align=True)
+    fb_row.operator(
+        "wm.url_open",
+        text="Bug / 功能建议",
+        icon="GHOST_ENABLED",
+    ).url = "https://github.com/Neocvsu-commits/asset-exporter-tool/issues/new"
+    fb_row.operator(
+        "wm.url_open",
+        text="匿名反馈",
+        icon="COMMUNITY",
+    ).url = "https://docs.qq.com/form/page/DTm5sVnJuTkpSbGZ5?templateId=25000&create_type=2&no_promotion=1&is_blank_or_template=blank#/fill"
+    fb_row2 = feedback_box.row()
+    fb_row2.operator(
+        "wm.url_open",
+        text="⭐ 作者主页（了解更多工具）",
+        icon="URL",
+    ).url = "https://github.com/Neocvsu-commits"

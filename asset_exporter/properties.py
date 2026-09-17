@@ -118,3 +118,12 @@ class ASSET_EXPORTER_V2_Properties(bpy.types.PropertyGroup):
         description="启用 Draco 网格压缩可大幅减小 GLB 体积（接收端需支持 Draco 解码）",
         default=False,
     )
+
+
+class ASSET_EXPORTER_AddonPreferences(bpy.types.AddonPreferences):
+    bl_idname = __package__
+
+    def draw(self, context):
+        from .ui import draw_support_preferences
+        self.layout.label(text="导出功能位于 3D 视图侧栏 Asset Export")
+        draw_support_preferences(self.layout)
