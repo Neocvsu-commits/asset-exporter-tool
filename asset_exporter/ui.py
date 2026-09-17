@@ -8,40 +8,33 @@ from .utils import (
 
 
 def _draw_update_banner(layout):
-    """面板顶部：版本状态 + 刷新按钮。"""
-    try:
-        from .update_checker import get_update_info, get_check_status
-    except ImportError:
-        return
+    """Always show the installed version and the update entry in the working UI."""
+    from . import bl_info
+    from .update_checker import get_update_info, get_check_status
 
     row = layout.row(align=True)
+    row.alignment = "LEFT"
+    row.label(text="v" + ".".join(map(str, bl_info["version"])), icon="INFO")
+    row.operator("asset_exporter_v2.check_update", text="检查更新", icon="FILE_REFRESH")
     status = get_check_status("Neocvsu-commits", "asset-exporter-tool")
-    st = status.get("status", "pending")
-
-    if st == "checking":
-        row.label(text="正在检查更新...", icon="SORTTIME")
-    elif st == "error":
-        row.label(text=f"更新检查失败: {status.get('error', '未知错误')}", icon="CANCEL")
-    elif st == "no_release":
-        row.label(text="暂无可获取的 Release", icon="INFO")
-    elif st == "no_update" and status.get("current_version"):
-        row.label(text=f"已是最新版本 v{status['current_version']}", icon="CHECKMARK")
-    elif st == "pending":
-        row.label(text="等待更新检查...", icon="TIME")
-
-    row.operator("asset_exporter_v2.check_update", text="", icon="FILE_REFRESH")
+    state = status.get("status", "pending")
+    if state == "checking":
+        row.label(text="检查中…", icon="SORTTIME")
+    elif state == "no_update":
+        row.label(text="已是最新版", icon="CHECKMARK")
+    elif state == "error":
+        layout.label(text="更新检查失败，请重试", icon="ERROR")
+    elif state == "no_release":
+        row.label(text="暂无发布版本", icon="INFO")
 
     info = get_update_info("Neocvsu-commits", "asset-exporter-tool")
-    if not info:
-        return
-    box = layout.box()
-    box.alert = True
-    col = box.column(align=True)
-    col.label(text=f" 当前版本: v{info['current_version']}", icon="INFO")
-    col.label(text=f" 最新版本: v{info['latest_version']}", icon="URL")
-    row = col.row(align=True)
-    row.operator("wm.url_open", text="查看 Release", icon="URL").url = info["html_url"]
-    row.operator("asset_exporter_v2.install_update", text="一键更新", icon="IMPORT")
+    if info:
+        update_row = layout.row(align=True)
+        update_row.alert = True
+        update_row.label(text=f"可更新至 v{info['latest_version']}", icon="IMPORT")
+        update_row.operator("asset_exporter_v2.install_update", text="一键更新", icon="IMPORT")
+        update_row.operator("wm.url_open", text="更新说明", icon="URL").url = info["html_url"]
+
 
 
 class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
@@ -53,6 +46,7 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        _draw_update_banner(layout)
         props = context.scene.asset_exporter_v2_props
         selected_meshes = get_selected_meshes(context)
         check_status = get_assets_check_status(context, selected_meshes)
@@ -183,23 +177,12 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
 
         name_box = layout.box()
         name_box.label(text="导出命名", icon="SORTALPHA")
-        if props.export_mode == "MERGED":
-            name_box.label(text="合并：主名称 = 文件夹与主 .fbx/.glb 文件名；刷新取当前活动物体名", icon="INFO")
-        else:
-            name_box.label(text="逐个：各文件名为物体名；刷新可将活动物体名填入下方作对照", icon="INFO")
         row_name = name_box.row(align=True)
         row_name.prop(props, "export_base_name", text="主名称")
         row_name.operator("asset_exporter_v2.refresh_export_name", text="", icon="FILE_REFRESH")
         name_box.prop(props, "export_chinese_name", text="中文名称")
 
-        hint_box = layout.box()
-        if props.export_textures:
-            hint_box.label(text="安全模式提取关联贴图（不影响原盘）", icon="CHECKMARK")
-        else:
-            hint_box.label(text="已关闭贴图提取，仅导出模型文件", icon="INFO")
-
         layout.separator()
-        layout.prop(props, "export_layout", text="导出结构")
         op_row = layout.row()
         has_any_output = any([
             props.export_fbx,

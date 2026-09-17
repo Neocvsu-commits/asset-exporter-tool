@@ -31,7 +31,7 @@ class ASSET_EXPORTER_V2_OT_RefreshExportName(bpy.types.Operator):
 class ASSET_EXPORTER_V2_OT_Export(bpy.types.Operator):
     bl_idname = "export_scene.norm_asset_v2"
     bl_label = "选择目录并导出"
-    bl_description = "选择导出目录后直接执行导出"
+    bl_description = "主名称=文件夹与主.fbx/.glb文件名；刷新取当前活动物体名"
     bl_options = {"REGISTER", "UNDO"}
 
     directory: bpy.props.StringProperty(

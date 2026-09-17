@@ -1404,27 +1404,13 @@ def run_export_pipeline(context, base_dir, reporter):
     original_selected = context.selected_objects.copy()
     original_active = context.active_object
 
-    def build_direct_texture_dir_name(asset_name: str) -> str:
-        """
-        直接导出模式贴图目录命名：
-        - SM_KDJZ01 -> T_KDJZ01
-        - 其他名称 -> T_<资产名>
-        """
-        clean = sanitize_export_basename(asset_name or "") or "Asset"
-        if clean.upper().startswith("SM_"):
-            core = clean[3:] or "Asset"
-        else:
-            core = clean
-        return f"T_{core}"
-
     def build_unique_export_target(source_name):
         base_name = source_name.replace(".", "_")
         export_name = base_name
-        packaged = (props.export_layout == "PACKAGED")
         idx = 1
 
         while True:
-            model_dir = os.path.join(base_dir, export_name) if packaged else base_dir
+            model_dir = os.path.join(base_dir, export_name)
             fbx_path = os.path.join(model_dir, f"{export_name}.fbx")
             glb_path = os.path.join(model_dir, f"{export_name}.glb")
             blend_path = os.path.join(model_dir, f"{export_name}.blend")
@@ -1433,14 +1419,7 @@ def run_export_pipeline(context, base_dir, reporter):
             check_report_path = os.path.join(model_dir, f"{export_name}_Check.csv")
             check_json_path = os.path.join(model_dir, f"{export_name}_Check.json")
 
-            if packaged:
-                conflict = os.path.isdir(model_dir)
-            else:
-                conflict = any(os.path.exists(p) for p in (
-                    fbx_path, glb_path, blend_path, report_path, basic_json_path, check_report_path, check_json_path
-                ))
-
-            if not conflict:
+            if not os.path.isdir(model_dir):
                 return export_name, model_dir, fbx_path, glb_path, blend_path, report_path, basic_json_path, check_report_path, check_json_path
 
             export_name = f"{base_name}_{idx:03d}"
@@ -1452,11 +1431,7 @@ def run_export_pipeline(context, base_dir, reporter):
             raise RuntimeError("资产主名称无效，请检查命名")
 
         export_model_name, model_dir, fbx_path, glb_path, blend_path, report_path, basic_json_path, check_report_path, check_json_path = build_unique_export_target(folder_base_name)
-        tex_dir = (
-            os.path.join(model_dir, "Texture")
-            if props.export_layout == "PACKAGED"
-            else os.path.join(model_dir, build_direct_texture_dir_name(export_model_name))
-        )
+        tex_dir = os.path.join(model_dir, "Texture")
 
         os.makedirs(model_dir, exist_ok=True)
         if props.export_textures:
@@ -1692,10 +1667,7 @@ def run_export_pipeline(context, base_dir, reporter):
     try:
         if props.export_mode == "MERGED":
             result = export_one_asset(selected_meshes, props.export_base_name)
-            if props.export_layout == "PACKAGED":
-                reporter.report({"INFO"}, f"资产导出成功：{result['dir']}")
-            else:
-                reporter.report({"INFO"}, f"资产导出成功：{base_dir}")
+            reporter.report({"INFO"}, f"资产导出成功：{result['dir']}")
         else:
             for obj in selected_meshes:
                 export_one_asset([obj], obj.name)

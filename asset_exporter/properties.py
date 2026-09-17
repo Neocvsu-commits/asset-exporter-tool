@@ -40,16 +40,6 @@ class ASSET_EXPORTER_V2_Properties(bpy.types.PropertyGroup):
         ],
         default="MERGED",
     )
-    export_layout: bpy.props.EnumProperty(
-        name="导出结构",
-        description="选择是否创建外层资产文件夹",
-        items=[
-            ("PACKAGED", "打包导出", "每个资产创建独立外层文件夹（原有团队默认）"),
-            ("DIRECT", "直接导出", "不创建外层文件夹，直接把文件导出到所选目录"),
-        ],
-        default="PACKAGED",
-    )
-
     export_csv: bpy.props.BoolProperty(
         name="导出基础信息 CSV",
         description="导出基础信息检查报告 CSV",
