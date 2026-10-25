@@ -1,5 +1,6 @@
-﻿import bpy
+import bpy
 import os
+import re
 import sys
 import csv
 import json
@@ -413,7 +414,8 @@ def collect_texture_details(obj):
             w, h = img.size[0], img.size[1]
             resolution = f"{w}x{h}" if w and h else "无数据/未加载"
             source_path = "Packed In Blend File" if img.packed_file else bpy.path.abspath(img.filepath)
-            texture_details.append((img.name, resolution, source_path))
+            # 报表里写落盘文件名（已剥掉 .NNN 编号），与 Texture 目录一致
+            texture_details.append((get_export_image_filename(img), resolution, source_path))
     return texture_details
 
 
@@ -602,6 +604,22 @@ def _normalize_image_ext(ext):
     return "jpg" if ext == "jpeg" else ext
 
 
+# Blender 在镜像数据块重名时自动追加 .001 / .002 / .007 ……
+# 这类后缀是数据块编号，不是文件扩展名，导出前必须剥掉。
+_DUP_SUFFIX_RE = re.compile(r"\.\d{3,}$")
+
+
+def strip_image_dup_suffix(name):
+    """剥掉 Blender 自动追加的 .NNN 重名后缀：T_X_D.tga.001 → T_X_D.tga"""
+    if not name:
+        return ""
+    prev = None
+    while prev != name:
+        prev = name
+        name = _DUP_SUFFIX_RE.sub("", name)
+    return name
+
+
 def get_image_extension(img):
     fmt_ext = ""
     fmt = getattr(img, "file_format", "")
@@ -611,7 +629,7 @@ def get_image_extension(img):
             fmt_ext = _normalize_image_ext(fmt)
 
     name_ext = ""
-    name = getattr(img, "name", "")
+    name = strip_image_dup_suffix(getattr(img, "name", ""))
     if name:
         name_ext = _normalize_image_ext(os.path.splitext(name)[1])
 
@@ -713,18 +731,29 @@ def _should_export_from_memory(img):
     return bool(disk_ext and export_ext and disk_ext != export_ext)
 
 
-def copy_or_extract_image(img, target_dir, scene=None):
+def get_export_image_filename(img):
+    """贴图落盘文件名（不含目录）。
+
+    数据块名可能被 Blender 加了 .001 编号（如 T_X_D.tga.001），必须先剥掉
+    编号再按真实图片格式补扩展名，否则交付出去就是 X.tga.001。
+    """
     ext = get_image_extension(img)
     if not ext.startswith("."):
         ext = "." + ext
 
+    img_name = strip_image_dup_suffix(getattr(img, "name", "")) or "image"
+
     # 替换旧扩展名，而非追加（避免 T_KTWJ01_D.tga.targa 双后缀）
-    img_name = img.name
     old_ext = os.path.splitext(img_name)[1].lower()
     if old_ext and old_ext != ext and img_name.lower().endswith(old_ext):
         img_name = img_name[: -len(old_ext)]
     if not img_name.lower().endswith(ext):
         img_name += ext
+    return img_name
+
+
+def copy_or_extract_image(img, target_dir, scene=None):
+    img_name = get_export_image_filename(img)
 
     target_path = os.path.join(target_dir, img_name)
     if os.path.exists(target_path):
