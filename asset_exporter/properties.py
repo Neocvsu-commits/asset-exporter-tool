@@ -67,7 +67,7 @@ class ASSET_EXPORTER_V2_Properties(bpy.types.PropertyGroup):
     )
     export_textures: bpy.props.BoolProperty(
         name="导出提取贴图",
-        description="自动提取材质关联贴图到 Texture 目录内",
+        description="按原尺寸提取到 Texture 目录。完全不透明的贴图保存为 JPG，含透明或半透明像素的贴图保存为 PNG",
         default=True,
     )
     export_base_name: bpy.props.StringProperty(

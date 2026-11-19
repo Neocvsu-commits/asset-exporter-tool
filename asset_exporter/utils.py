@@ -4,7 +4,7 @@ import re
 import sys
 import csv
 import json
-import shutil
+import tempfile
 import addon_utils
 import math
 from mathutils import Matrix
@@ -363,13 +363,13 @@ def collect_unique_material_names(objs):
     return names
 
 
-def collect_texture_details_from_objects(objs):
+def collect_texture_details_from_objects(objs, extracted_names=None):
     details = []
     seen_images = set()
     for o in objs or []:
         if not o or getattr(o, "type", None) != "MESH":
             continue
-        for name, res, path in collect_texture_details(o):
+        for name, res, path in collect_texture_details(o, extracted_names):
             if name in seen_images:
                 continue
             seen_images.add(name)
@@ -397,25 +397,30 @@ def sync_copy_names_from_sources(source_objects, copied_objects):
     return renamed
 
 
-def collect_texture_details(obj):
-    texture_details = []
-    seen_images = set()
+def _material_images(obj):
     for slot in obj.material_slots:
         mat = slot.material
         if not (mat and mat.use_nodes and mat.node_tree):
             continue
         for node in mat.node_tree.nodes:
-            if node.type != "TEX_IMAGE" or not node.image:
-                continue
-            img = node.image
-            if img.name in seen_images:
-                continue
-            seen_images.add(img.name)
-            w, h = img.size[0], img.size[1]
-            resolution = f"{w}x{h}" if w and h else "无数据/未加载"
-            source_path = "Packed In Blend File" if img.packed_file else bpy.path.abspath(img.filepath)
-            # 报表里写落盘文件名（已剥掉 .NNN 编号），与 Texture 目录一致
-            texture_details.append((get_export_image_filename(img), resolution, source_path))
+            if node.type == "TEX_IMAGE" and node.image:
+                yield node.image
+
+
+def collect_texture_details(obj, extracted_names=None):
+    texture_details = []
+    for img in dict.fromkeys(_material_images(obj)):
+        w, h = img.size
+        resolution = f"{w}x{h}" if w and h else "无数据/未加载"
+        source_path = "Packed In Blend File" if img.packed_file else bpy.path.abspath(img.filepath)
+        if extracted_names is None:
+            filename = get_export_image_filename(img)
+        else:
+            filename = extracted_names[img]
+            if filename is None:
+                filename = img.name
+                source_path = f"未提取 | {source_path}"
+        texture_details.append((filename, resolution, source_path))
     return texture_details
 
 
@@ -492,12 +497,12 @@ def get_animation_and_rig_status(obj):
     return is_rigged, has_animation, animation_types
 
 
-def _build_basic_information_rows(obj, model_file_path, export_textures, asset_chinese_name, asset_name_override=None, forward_axis="未定义", global_quat=None, all_mesh_objects=None):
+def _build_basic_information_rows(obj, model_file_path, export_textures, asset_chinese_name, asset_name_override=None, forward_axis="未定义", global_quat=None, all_mesh_objects=None, extracted_names=None):
     meshes = list(all_mesh_objects) if all_mesh_objects else [obj]
     tri_count = total_mesh_triangle_count(meshes)
     has_loc, has_rot, has_scale = get_transform_status(obj)
     material_names = collect_unique_material_names(meshes)
-    texture_details = collect_texture_details_from_objects(meshes)
+    texture_details = collect_texture_details_from_objects(meshes, extracted_names)
     dimensions = obj.dimensions
     asset_name = asset_name_override or obj.name
     is_rigged, has_animation, animation_types = get_animation_and_rig_status(obj)
@@ -538,7 +543,7 @@ def _build_basic_information_rows(obj, model_file_path, export_textures, asset_c
     return rows
 
 
-def write_basic_information_csv(obj, report_path, model_file_path, export_textures, asset_chinese_name, asset_name_override=None, forward_axis="未定义", global_quat=None, all_mesh_objects=None):
+def write_basic_information_csv(obj, report_path, model_file_path, export_textures, asset_chinese_name, asset_name_override=None, forward_axis="未定义", global_quat=None, all_mesh_objects=None, extracted_names=None):
     rows = _build_basic_information_rows(
         obj,
         model_file_path,
@@ -548,6 +553,7 @@ def write_basic_information_csv(obj, report_path, model_file_path, export_textur
         forward_axis,
         global_quat,
         all_mesh_objects,
+        extracted_names,
     )
 
     with open(report_path, "w", newline="", encoding="utf-8-sig") as csv_file:
@@ -557,7 +563,7 @@ def write_basic_information_csv(obj, report_path, model_file_path, export_textur
             writer.writerow([r["field_label_cn"], r["value"], r["status"], r["note"]])
 
 
-def write_basic_information_json(obj, json_path, model_file_path, export_textures, asset_chinese_name, asset_name_override=None, forward_axis="未定义", global_quat=None, all_mesh_objects=None):
+def write_basic_information_json(obj, json_path, model_file_path, export_textures, asset_chinese_name, asset_name_override=None, forward_axis="未定义", global_quat=None, all_mesh_objects=None, extracted_names=None):
     rows = _build_basic_information_rows(
         obj,
         model_file_path,
@@ -567,6 +573,7 @@ def write_basic_information_json(obj, json_path, model_file_path, export_texture
         forward_axis,
         global_quat,
         all_mesh_objects,
+        extracted_names,
     )
     payload = {"fields": rows}
 
@@ -584,18 +591,6 @@ _FILE_FORMAT_EXT_MAP = {
     "BMP": "bmp",
     "OPEN_EXR": "exr",
 }
-
-_EXT_TO_FILE_FORMAT = {
-    ".jpg": "JPEG",
-    ".jpeg": "JPEG",
-    ".png": "PNG",
-    ".tga": "TARGA",
-    ".tif": "TIFF",
-    ".tiff": "TIFF",
-    ".bmp": "BMP",
-    ".exr": "OPEN_EXR",
-}
-
 
 def _normalize_image_ext(ext):
     if not ext:
@@ -647,97 +642,66 @@ def get_image_extension(img):
     return "png"
 
 
-def _ensure_image_pixels_for_export(img):
-    if not img or img.size[0] <= 0 or img.size[1] <= 0:
-        if getattr(img, "packed_file", None):
-            try:
-                img.reload()
-            except Exception:
-                pass
-    return img and img.size[0] > 0 and img.size[1] > 0
+def _read_texture_pixels(img):
+    import numpy as np
+
+    width, height = img.size
+    count = len(img.pixels)
+    if not width or not height or not count:
+        raise ValueError(f"贴图「{img.name}」没有可读取的像素")
+    channels, remainder = divmod(count, width * height)
+    if remainder or channels not in (1, 2, 3, 4):
+        raise ValueError(f"贴图「{img.name}」的像素通道布局无法读取")
+    pixels = np.empty(count, dtype=np.float32)
+    img.pixels.foreach_get(pixels)
+    return pixels.reshape(-1, channels)
 
 
-def _write_image_memory_to_path(img, target_path, scene=None):
-    if not _ensure_image_pixels_for_export(img):
-        packed = getattr(img, "packed_file", None)
-        if packed and packed.data:
-            try:
-                with open(target_path, "wb") as f:
-                    f.write(packed.data)
-                return os.path.getsize(target_path) > 0
-            except Exception as e:
-                print(f"[Asset Exporter] 写出 packed 字节失败 {getattr(img, 'name', '?')}: {e}")
-        return False
+def _extracted_image_extension(img, pixels):
+    if img.alpha_mode == "NONE" or pixels.shape[1] in (1, 3):
+        return "jpg"
+    return "png" if pixels[:, -1].min() < 1.0 else "jpg"
 
-    ext = os.path.splitext(target_path)[1].lower()
-    target_fmt = _EXT_TO_FILE_FORMAT.get(ext)
-    old_fmt = getattr(img, "file_format", None)
+
+def _write_extracted_image(img, pixels, target_path):
+    """用当前像素编码到独立的图像数据块，保留源图和场景渲染设置。"""
+    import numpy as np
+
+    width, height = img.size
+    channels = pixels.shape[1]
+    keep_alpha = os.path.splitext(target_path)[1].lower() == ".png"
+    if channels < 4:
+        rgba = np.ones((width * height, 4), dtype=np.float32)
+        rgba[:, :3] = pixels[:, :1] if channels < 3 else pixels
+        if channels == 2:
+            rgba[:, 3] = pixels[:, 1]
+        pixels = rgba
+    if not keep_alpha:
+        pixels[:, 3] = 1.0
+
+    output = bpy.data.images.new(
+        "__asset_export_texture__", width=width, height=height,
+        alpha=keep_alpha, float_buffer=img.is_float,
+        is_data=img.colorspace_settings.is_data,
+    )
     try:
-        if target_fmt:
-            img.file_format = target_fmt
-        img.save_render(target_path, scene=scene)
-        if os.path.isfile(target_path) and os.path.getsize(target_path) > 0:
-            return True
-    except Exception as e:
-        print(f"[Asset Exporter] save_render 写出失败 {getattr(img, 'name', '?')}: {e}")
+        output.colorspace_settings.name = img.colorspace_settings.name
+        output.alpha_mode = img.alpha_mode
+        output.pixels.foreach_set(pixels.ravel())
+        output.file_format = "PNG" if keep_alpha else "JPEG"
+        output.filepath_raw = target_path
+        output.save()
     finally:
-        if old_fmt is not None:
-            try:
-                img.file_format = old_fmt
-            except Exception:
-                pass
-
-    packed = getattr(img, "packed_file", None)
-    if packed and packed.data:
-        try:
-            with open(target_path, "wb") as f:
-                f.write(packed.data)
-            return os.path.getsize(target_path) > 0
-        except Exception as e:
-            print(f"[Asset Exporter] packed 兜底写出失败 {getattr(img, 'name', '?')}: {e}")
-    return False
+        bpy.data.images.remove(output)
 
 
-def _image_has_memory_pixels(img):
-    if not img:
-        return False
-    if img.size[0] <= 0 or img.size[1] <= 0:
-        return False
-    return bool(getattr(img, "has_data", False) or getattr(img, "packed_file", None))
-
-
-def _should_export_from_memory(img):
-    """内存像素与磁盘路径不一致时，必须从内存写出（缩放/格式转换后常见）。"""
-    if not _image_has_memory_pixels(img):
-        return False
-    if getattr(img, "packed_file", None):
-        return True
-    if img.get("_pbr_unsynced_resize"):
-        return True
-
-    name_ext = _normalize_image_ext(os.path.splitext(getattr(img, "name", ""))[1])
-    fmt = getattr(img, "file_format", "")
-    raw_fmt_ext = _FILE_FORMAT_EXT_MAP.get(fmt.upper(), "") if fmt else ""
-    if not raw_fmt_ext and fmt:
-        raw_fmt_ext = _normalize_image_ext(fmt)
-    if name_ext and raw_fmt_ext and name_ext != raw_fmt_ext:
-        return True
-
-    export_ext = get_image_extension(img)
-    fp = bpy.path.abspath(getattr(img, "filepath", "") or "")
-    if not fp:
-        return True
-    disk_ext = _normalize_image_ext(os.path.splitext(fp)[1])
-    return bool(disk_ext and export_ext and disk_ext != export_ext)
-
-
-def get_export_image_filename(img):
+def get_export_image_filename(img, ext=None):
     """贴图落盘文件名（不含目录）。
 
     数据块名可能被 Blender 加了 .001 编号（如 T_X_D.tga.001），必须先剥掉
     编号再按真实图片格式补扩展名，否则交付出去就是 X.tga.001。
     """
-    ext = get_image_extension(img)
+    ext = ext or get_image_extension(img)
     if not ext.startswith("."):
         ext = "." + ext
 
@@ -753,25 +717,42 @@ def get_export_image_filename(img):
 
 
 def copy_or_extract_image(img, target_dir, scene=None):
-    img_name = get_export_image_filename(img)
+    pixels = _read_texture_pixels(img)
+    ext = _extracted_image_extension(img, pixels)
+    filename = get_export_image_filename(img, ext)
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", os.path.splitext(filename)[0])
+    target_path = os.path.join(target_dir, f"{stem}.{ext}")
+    suffix = 1
+    while os.path.exists(target_path):
+        target_path = os.path.join(target_dir, f"{stem}_{suffix:03d}.{ext}")
+        suffix += 1
 
-    target_path = os.path.join(target_dir, img_name)
-    if os.path.exists(target_path):
-        return target_path
-
-    if _should_export_from_memory(img):
-        if _write_image_memory_to_path(img, target_path, scene=scene):
-            return target_path
-
-    abs_path = bpy.path.abspath(img.filepath)
-    if os.path.exists(abs_path):
-        try:
-            shutil.copy2(abs_path, target_path)
-        except Exception:
-            pass
-    elif _image_has_memory_pixels(img):
-        _write_image_memory_to_path(img, target_path, scene=scene)
+    fd, temp_path = tempfile.mkstemp(dir=target_dir, suffix="." + ext)
+    os.close(fd)
+    try:
+        _write_extracted_image(img, pixels, temp_path)
+        if not os.path.getsize(temp_path):
+            raise OSError("编码器未写出图像")
+        os.replace(temp_path, target_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
     return target_path
+
+
+def _extract_material_images(objects, target_dir, reporter):
+    names = {}
+    for obj in objects:
+        for img in _material_images(obj):
+            if img in names:
+                continue
+            try:
+                path = copy_or_extract_image(img, target_dir)
+                names[img] = os.path.basename(path)
+            except (OSError, RuntimeError, ValueError) as exc:
+                names[img] = None
+                reporter.report({"WARNING"}, f"跳过贴图 {img.name}：{exc}")
+    return names
 
 
 def export_selected_objects_to_blend(filepath, objects, scene_name="Scene", collection_name="Collection"):
@@ -1539,6 +1520,7 @@ def run_export_pipeline(context, base_dir, reporter):
         temp_obj = temp_objects[0]
 
         try:
+            extracted_names = _extract_material_images(temp_objects, tex_dir, reporter) if props.export_textures else None
             report_meshes = temp_objects if len(temp_objects) > 1 else None
             main_model_path = fbx_path if props.export_fbx else (glb_path if props.export_glb else "")
             if props.export_csv:
@@ -1552,6 +1534,7 @@ def run_export_pipeline(context, base_dir, reporter):
                     forward_axis,
                     global_quat_list,
                     all_mesh_objects=report_meshes,
+                    extracted_names=extracted_names,
                 )
             if props.export_basic_json:
                 write_basic_information_json(
@@ -1564,6 +1547,7 @@ def run_export_pipeline(context, base_dir, reporter):
                     forward_axis,
                     global_quat_list,
                     all_mesh_objects=report_meshes,
+                    extracted_names=extracted_names,
                 )
             # 资产审查联动：任何异常都不应阻止模型正常导出，只给出警告并跳过
             # v2 下即便"未完全覆盖选中对象"，也允许导出当前可匹配到的结果（含空结构文件）。
@@ -1607,17 +1591,6 @@ def run_export_pipeline(context, base_dir, reporter):
                     bpy.ops.object.modifier_apply(modifier=tri_mod.name)
                 except Exception as e:
                     print(f"[Asset Exporter] 三角化失败，已跳过：{e}")
-
-            if props.export_textures:
-                extracted_images = set()
-                for o in temp_objects:
-                    for slot in o.material_slots:
-                        mat = slot.material
-                        if mat and mat.use_nodes and mat.node_tree:
-                            for node in mat.node_tree.nodes:
-                                if node.type == "TEX_IMAGE" and node.image and node.image.name not in extracted_images:
-                                    copy_or_extract_image(node.image, tex_dir, scene=context.scene)
-                                    extracted_images.add(node.image.name)
 
             bpy.ops.object.select_all(action="DESELECT")
             for o in temp_objects:
