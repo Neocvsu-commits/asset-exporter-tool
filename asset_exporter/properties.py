@@ -20,7 +20,7 @@ class ASSET_EXPORTER_V2_Properties(bpy.types.PropertyGroup):
         name="模型正前方向",
         description="选择当前模型的正前方向，将自动在模型原点生成箭头",
         items=[
-            ("NONE", "无", "不定义正前方向，删除已有箭头"),
+            ("NONE", "未设置", "不定义正前方向，删除已有箭头"),
             ("POS_X", "+X", "正前方向为 +X 轴"),
             ("NEG_X", "-X", "正前方向为 -X 轴"),
             ("POS_Y", "+Y", "正前方向为 +Y 轴"),
@@ -80,10 +80,22 @@ class ASSET_EXPORTER_V2_Properties(bpy.types.PropertyGroup):
         description="仅写入基础信息 CSV/JSON，不参与文件/目录命名",
         default="",
     )
+    show_asset_details: bpy.props.BoolProperty(
+        name="模型详情",
+        description="查看面数、尺寸、变换及材质贴图",
+        default=False,
+        options={"SKIP_SAVE"},
+    )
     show_materials_info: bpy.props.BoolProperty(
         name="展开材质与贴图解析",
         description="显示或隐藏插槽材质及贴图详情",
         default=False,
+    )
+    show_extra_files: bpy.props.BoolProperty(
+        name="附属文件",
+        description="选择导出的报告、工程备份和贴图",
+        default=False,
+        options={"SKIP_SAVE"},
     )
     last_export_directory: bpy.props.StringProperty(
         name="上次导出根目录",
@@ -115,5 +127,4 @@ class ASSET_EXPORTER_AddonPreferences(bpy.types.AddonPreferences):
 
     def draw(self, context):
         from .ui import draw_support_preferences
-        self.layout.label(text="导出功能位于 3D 视图侧栏 Asset Export")
         draw_support_preferences(self.layout)

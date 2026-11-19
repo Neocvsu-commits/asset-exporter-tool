@@ -15,6 +15,7 @@ from .utils import (
 class ASSET_EXPORTER_V2_OT_RefreshExportName(bpy.types.Operator):
     bl_idname = "asset_exporter_v2.refresh_export_name"
     bl_label = "刷新预设名称"
+    bl_description = "使用当前选中网格的建议名称填入主名称"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -87,8 +88,8 @@ class ASSET_EXPORTER_V2_OT_OpenLastExportDir(bpy.types.Operator):
 
 class ASSET_EXPORTER_V2_OT_OpenFBXAdvancedOptions(bpy.types.Operator):
     bl_idname = "asset_exporter_v2.open_fbx_advanced_options"
-    bl_label = "更多 FBX 参数"
-    bl_description = "打开 FBX 参数弹窗（仅配置，不直接导出；参数与当前 Blender 版本一致）"
+    bl_label = "FBX 参数"
+    bl_description = "调整 Blender 的 FBX 导出参数。导出范围固定为选中的模型"
     bl_options = {"REGISTER"}
 
     @classmethod
@@ -133,9 +134,6 @@ class ASSET_EXPORTER_V2_OT_OpenFBXAdvancedOptions(bpy.types.Operator):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        head = layout.box()
-        head.label(text="参数来源：Blender 当前版本 FBX 导出器", icon="INFO")
-        head.label(text="仅记录参数；统一导出时固定“选定的物体”", icon="CHECKMARK")
         mod.export_main(layout, op_props, True)
         mod.export_panel_include(layout, op_props, True)
         mod.export_panel_transform(layout, op_props)
@@ -144,14 +142,14 @@ class ASSET_EXPORTER_V2_OT_OpenFBXAdvancedOptions(bpy.types.Operator):
         mod.export_panel_animation(layout, op_props)
 
     def execute(self, context):
-        self.report({"INFO"}, "FBX 参数已更新，将在“选择目录并导出”时生效")
+        self.report({"INFO"}, "已更新 FBX 参数")
         return {"FINISHED"}
 
 
 class ASSET_EXPORTER_V2_OT_OpenGLBAdvancedOptions(bpy.types.Operator):
     bl_idname = "asset_exporter_v2.open_glb_advanced_options"
-    bl_label = "更多 GLB 参数"
-    bl_description = "打开 GLB 参数弹窗（仅配置，不直接导出；参数与当前 Blender 版本一致）"
+    bl_label = "GLB 参数"
+    bl_description = "调整 Blender 的 glTF 导出参数。选中的模型将以 GLB 格式导出"
     bl_options = {"REGISTER"}
 
     @classmethod
@@ -221,9 +219,6 @@ class ASSET_EXPORTER_V2_OT_OpenGLBAdvancedOptions(bpy.types.Operator):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        head = layout.box()
-        head.label(text="参数来源：Blender 当前版本 GLTF/GLB 导出器", icon="INFO")
-        head.label(text="仅记录参数；统一导出时固定“GLB + 选定的物体”", icon="CHECKMARK")
         mod.export_main(layout, op_props, True)
         mod.export_panel_collection(layout, op_props, True)
         mod.export_panel_include(layout, op_props, True)
@@ -240,7 +235,7 @@ class ASSET_EXPORTER_V2_OT_OpenGLBAdvancedOptions(bpy.types.Operator):
         props = context.scene.asset_exporter_v2_props
         op_props = context.window_manager.operator_properties_last("export_scene.gltf")
         self._sync_operator_to_panel(op_props, props)
-        self.report({"INFO"}, "GLB 参数已更新，将在\"选择目录并导出\"时生效")
+        self.report({"INFO"}, "已更新 GLB 参数")
         return {"FINISHED"}
 
 
