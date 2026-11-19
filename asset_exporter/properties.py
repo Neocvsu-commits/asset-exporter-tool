@@ -1,5 +1,64 @@
 import bpy
 
+_FORWARD_DIR_ITEMS = (
+    ("NONE", "未设置", "不定义正前方向，删除已有箭头"),
+    ("POS_X", "+X", "正前方向为 +X 轴"),
+    ("NEG_X", "-X", "正前方向为 -X 轴"),
+    ("POS_Y", "+Y", "正前方向为 +Y 轴"),
+    ("NEG_Y", "-Y", "正前方向为 -Y 轴"),
+    ("POS_Z", "+Z", "正前方向为 +Z 轴"),
+    ("NEG_Z", "-Z", "正前方向为 -Z 轴"),
+)
+_FORWARD_AXIS_TO_INDEX = {
+    "NONE": 0,
+    "+X": 1,
+    "-X": 2,
+    "+Y": 3,
+    "-Y": 4,
+    "+Z": 5,
+    "-Z": 6,
+}
+
+
+def _get_forward_direction(self):
+    context = getattr(bpy, "context", None)
+    if context is None:
+        return 0
+    selected = getattr(context, "selected_objects", None) or ()
+    meshes = [o for o in selected if getattr(o, "type", None) == "MESH"]
+    active = getattr(context, "active_object", None)
+    if active and getattr(active, "type", None) == "MESH" and (not meshes or active in meshes):
+        target = active
+    elif meshes:
+        target = meshes[0]
+    else:
+        return 0
+
+    arrow = bpy.data.objects.get("HELPER_ForwardArrow_" + target.name)
+    if arrow:
+        saved = arrow.get("forward_dir")
+        if saved in _FORWARD_AXIS_TO_INDEX:
+            return _FORWARD_AXIS_TO_INDEX[saved]
+    for child in getattr(target, "children", ()):
+        if child.name.startswith("HELPER_ForwardArrow_"):
+            saved = child.get("forward_dir")
+            if saved in _FORWARD_AXIS_TO_INDEX:
+                return _FORWARD_AXIS_TO_INDEX[saved]
+    saved = target.get("asset_export_forward_dir")
+    if saved in _FORWARD_AXIS_TO_INDEX:
+        return _FORWARD_AXIS_TO_INDEX[saved]
+    return 0
+
+
+def _set_forward_direction(self, value):
+    from .utils import apply_forward_arrow
+    context = getattr(bpy, "context", None)
+    if context is None:
+        return
+    direction = _FORWARD_DIR_ITEMS[value][0] if 0 <= value < len(_FORWARD_DIR_ITEMS) else "NONE"
+    apply_forward_arrow(context, direction)
+
+
 def update_forward_direction(self, context):
     from .utils import apply_forward_arrow
     apply_forward_arrow(context, self.forward_direction)
@@ -19,17 +78,9 @@ class ASSET_EXPORTER_V2_Properties(bpy.types.PropertyGroup):
     forward_direction: bpy.props.EnumProperty(
         name="模型正前方向",
         description="选择当前模型的正前方向，将自动在模型原点生成箭头",
-        items=[
-            ("NONE", "未设置", "不定义正前方向，删除已有箭头"),
-            ("POS_X", "+X", "正前方向为 +X 轴"),
-            ("NEG_X", "-X", "正前方向为 -X 轴"),
-            ("POS_Y", "+Y", "正前方向为 +Y 轴"),
-            ("NEG_Y", "-Y", "正前方向为 -Y 轴"),
-            ("POS_Z", "+Z", "正前方向为 +Z 轴"),
-            ("NEG_Z", "-Z", "正前方向为 -Z 轴"),
-        ],
-        default="NONE",
-        update=update_forward_direction
+        items=_FORWARD_DIR_ITEMS,
+        get=_get_forward_direction,
+        set=_set_forward_direction,
     )
     export_mode: bpy.props.EnumProperty(
         name="导出模式",

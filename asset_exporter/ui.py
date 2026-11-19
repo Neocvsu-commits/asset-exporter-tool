@@ -1,6 +1,11 @@
 import bpy
 
-from .utils import get_assets_check_status, get_selected_meshes, has_unapplied_transform
+from .utils import get_assets_check_status, get_selected_meshes
+
+
+def _format_dim(value):
+    text = f"{value:.2f}".rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def _draw_update_banner(layout):
@@ -12,71 +17,98 @@ def _draw_update_banner(layout):
     text, icon = {
         "checking": ("检查中…", "SORTTIME"),
         "no_update": ("已是最新版", "CHECKMARK"),
-        "error": ("检查失败，重试", "ERROR"),
-        "no_release": ("暂无发布版本", "INFO"),
+        "error": ("重试", "ERROR"),
+        "no_release": ("暂无发布", "INFO"),
     }.get(state, ("检查更新", "FILE_REFRESH"))
+
     row = layout.row(align=True)
-    row.label(text="v" + ".".join(map(str, bl_info["version"])))
-    row.operator("asset_exporter_v2.check_update", text=text, icon=icon)
-
+    row.alignment = "LEFT"
+    ver = row.row(align=True)
+    ver.alignment = "LEFT"
+    ver.active = False
+    ver.label(text="v" + ".".join(map(str, bl_info["version"])), translate=False)
     info = get_update_info(*repo)
+    row.operator("asset_exporter_v2.check_update", text="" if info else text, icon=icon)
+
     if info:
-        row = layout.row(align=True)
-        row.operator("asset_exporter_v2.install_update", text=f"更新至 v{info['latest_version']}", icon="IMPORT")
-        row.operator("wm.url_open", text="更新说明", icon="URL").url = info["html_url"]
+        update_row = layout.row(align=True)
+        update_row.alert = True
+        update_row.operator(
+            "asset_exporter_v2.install_update",
+            text=f"更新至 v{info['latest_version']}",
+            icon="IMPORT",
+        )
+        update_row.operator("wm.url_open", text="", icon="URL").url = info["html_url"]
 
 
-def _disclosure(layout, props, prop_name, text):
+def _disclosure(layout, props, prop_name, text, *, translate=True):
     expanded = getattr(props, prop_name)
     icon = "TRIA_DOWN" if expanded else "TRIA_RIGHT"
-    layout.prop(props, prop_name, text=text, icon=icon, emboss=False)
+    row = layout.row(align=True)
+    row.alignment = "LEFT"
+    row.prop(props, prop_name, text=text, icon=icon, emboss=False, translate=translate)
     return expanded
 
 
+def _draw_field(layout, label, *, alert=False, enabled=True):
+    split = layout.split(factor=0.34, align=False)
+    split.enabled = enabled
+    lbl = split.row(align=True)
+    lbl.alignment = "RIGHT"
+    lbl.label(text=label)
+    val = split.row(align=True)
+    val.alert = alert
+    return val
+
+
 def _draw_asset_preview(layout, props, meshes, active):
-    if not meshes:
-        layout.label(text="请选择网格物体", icon="MESH_DATA")
-        return
-
-    if len(meshes) == 1:
-        active = meshes[0]
-        title = active.name
-    else:
-        title = f"已选 {len(meshes)} 个网格"
-    if active not in meshes:
-        layout.label(text=title, icon="MESH_DATA")
-        return
-
     box = layout.box()
-    if not _disclosure(box, props, "show_asset_details", title):
+    if not meshes:
+        row = box.row(align=True)
+        row.active = False
+        row.label(text="请选择网格物体", icon="MESH_DATA")
         return
-    if len(meshes) > 1:
-        box.label(text=active.name, icon="MESH_DATA")
-    box.label(text=f"{len(active.data.polygons):,} 面", icon="MESH_DATA")
-    box.label(text="尺寸")
-    row = box.row(align=True)
-    for index, axis in enumerate("XYZ"):
-        row.prop(active, "dimensions", index=index, text=axis)
-    if has_unapplied_transform(active):
-        box.label(text="导出时应用变换到副本", icon="INFO")
 
-    slots = [slot for slot in active.material_slots if slot.material]
+    target = active if active in meshes else meshes[0]
+    title = target.name if len(meshes) == 1 else f"已选 {len(meshes)} 个网格"
+    if not _disclosure(box, props, "show_asset_details", title, translate=False):
+        return
+
+    col = box.column(align=True)
+    if len(meshes) > 1:
+        col.label(text=target.name, icon="OBJECT_DATA", translate=False)
+    dims = target.dimensions
+    dim_text = f"{_format_dim(dims.x)} × {_format_dim(dims.y)} × {_format_dim(dims.z)} m"
+    col.label(text=f"{len(target.data.polygons):,} 面", icon="MESH_DATA", translate=False)
+    col.label(text=dim_text, icon="EMPTY_AXIS", translate=False)
+
+    slots = [slot for slot in target.material_slots if slot.material]
     if not slots:
-        box.label(text="无材质", icon="MATERIAL")
+        empty = col.row(align=True)
+        empty.active = False
+        empty.label(text="无材质", icon="MATERIAL")
         return
-    if not _disclosure(box, props, "show_materials_info", f"材质与贴图 ({len(slots)})"):
+    if not _disclosure(box, props, "show_materials_info", f"材质 ({len(slots)})", translate=False):
         return
+
+    mat_col = box.column(align=True)
     for slot in slots:
         mat = slot.material
         if not mat.use_nodes or not mat.node_tree:
-            box.label(text=f"{slot.name} · 未启用节点", icon="MATERIAL")
+            mat_col.label(text=f"{slot.name} · 无节点", icon="MATERIAL", translate=False)
             continue
         images = [n.image for n in mat.node_tree.nodes if n.type == "TEX_IMAGE" and n.image]
-        box.label(text=slot.name if images else f"{slot.name} · 无贴图", icon="MATERIAL")
+        mat_col.label(text=slot.name if images else f"{slot.name} · 无贴图", icon="MATERIAL", translate=False)
         for img in images:
             width, height = img.size
-            size = f"{width} × {height}" if width and height else "未加载"
-            box.label(text=f"{img.name} · {size}", icon="IMAGE_DATA" if width and height else "ERROR")
+            size = f"{width}×{height}" if width and height else "未加载"
+            sub = mat_col.row(align=True)
+            sub.separator(factor=1.2)
+            sub.label(
+                text=f"{img.name} ({size})",
+                icon="IMAGE_DATA" if width and height else "ERROR",
+                translate=False,
+            )
 
 
 def _draw_extra_files(layout, context, props, meshes):
@@ -85,18 +117,26 @@ def _draw_extra_files(layout, context, props, meshes):
         return
 
     check_status = get_assets_check_status(context, meshes)
-    basic = box.row(align=True)
-    basic.label(text="基础信息")
-    basic.prop(props, "export_csv", text="CSV")
-    basic.prop(props, "export_basic_json", text="JSON")
-    review = box.row(align=True)
-    review.enabled = check_status["all_selected_checked"]
-    review.label(text="资产审查")
-    review.prop(props, "export_check_csv", text="CSV")
-    review.prop(props, "export_check_json", text="JSON")
-    if meshes and not review.enabled:
-        reason = "请先审查全部所选网格" if check_status["backend"] else "请启用资产审查助手"
-        box.label(text=reason, icon="INFO")
+    review_ready = check_status["all_selected_checked"]
+
+    col = box.column(align=True)
+    for label, csv_prop, json_prop, enabled in (
+        ("基础信息", "export_csv", "export_basic_json", True),
+        ("资产审查", "export_check_csv", "export_check_json", review_ready),
+    ):
+        split = col.split(factor=0.38, align=True)
+        split.enabled = enabled
+        split.label(text=label)
+        checks = split.row(align=True)
+        checks.prop(props, csv_prop, text="CSV")
+        checks.prop(props, json_prop, text="JSON")
+
+    if meshes and not review_ready:
+        hint = box.row(align=True)
+        hint.active = False
+        hint.label(text="需先审查所选网格" if check_status["backend"] else "未启用资产审查")
+
+    box.separator(factor=0.3)
     row = box.row(align=True)
     row.prop(props, "export_blend", text="工程备份")
     row.prop(props, "export_textures", text="提取贴图")
@@ -114,41 +154,47 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
         props = context.scene.asset_exporter_v2_props
         meshes = get_selected_meshes(context)
         active = context.active_object
+
         _draw_update_banner(layout)
         _draw_asset_preview(layout, props, meshes, active)
 
         layout.row(align=True).prop(props, "export_mode", expand=True)
-        names = layout.column(align=True)
-        row = names.row(align=True)
-        row.prop(props, "export_base_name", text="主名称")
-        row.operator("asset_exporter_v2.refresh_export_name", text="", icon="FILE_REFRESH")
-        names.prop(props, "export_chinese_name", text="中文名称")
 
-        saved = active.get("asset_export_forward_dir") if active and active.type == "MESH" else None
-        direction = props.forward_direction
-        row = layout.row(align=True)
-        row.alert = bool(meshes) and direction == "NONE"
-        row.prop(props, "forward_direction", text="正前方向")
-        # The scene selector may still show the direction of the previous selection.
-        axis = direction.replace("POS_", "+").replace("NEG_", "-")
-        if active and active.type == "MESH" and (saved or "NONE") != axis:
-            layout.label(text=f"活动物体朝向　{saved or '未设置'}", icon="INFO")
+        names = layout.column(align=True)
+        if props.export_mode == "MERGED":
+            val = _draw_field(names, "主名称")
+            val.prop(props, "export_base_name", text="")
+            val.operator("asset_exporter_v2.refresh_export_name", text="", icon="FILE_REFRESH")
+        _draw_field(names, "中文名称").prop(props, "export_chinese_name", text="")
+
+        val = _draw_field(
+            layout,
+            "正前方向",
+            alert=bool(meshes) and props.forward_direction == "NONE",
+            enabled=bool(meshes),
+        )
+        val.prop(props, "forward_direction", text="")
 
         formats = layout.box()
-        row = formats.row(align=True)
         for label, toggle, operator in (
             ("FBX", "export_fbx", "asset_exporter_v2.open_fbx_advanced_options"),
             ("GLB", "export_glb", "asset_exporter_v2.open_glb_advanced_options"),
         ):
-            group = row.row(align=True)
-            group.prop(props, toggle, text=label)
-            settings = group.row(align=True)
+            row = formats.row(align=True)
+            row.prop(props, toggle, text=label)
+            settings = row.row(align=True)
+            settings.alignment = "RIGHT"
             settings.enabled = getattr(props, toggle)
             settings.operator(operator, text="", icon="PREFERENCES")
-        if props.export_glb:
-            row = formats.row(align=True)
-            row.prop(props, "glb_draco_compression", text="Draco 压缩")
-            row.prop(props, "glb_image_format", text="GLB 贴图")
+            if toggle == "export_glb" and props.export_glb:
+                sub = formats.row(align=False)
+                sub.separator(factor=1.2)
+                split = sub.split(factor=0.42, align=False)
+                split.prop(props, "glb_draco_compression", text="Draco")
+                fmt_row = split.row(align=False)
+                fmt_row.use_property_split = True
+                fmt_row.use_property_decorate = False
+                fmt_row.prop(props, "glb_image_format", text="贴图")
 
         _draw_extra_files(layout, context, props, meshes)
 
@@ -156,13 +202,12 @@ class ASSET_EXPORTER_V2_PT_Panel(bpy.types.Panel):
             props.export_fbx, props.export_glb, props.export_csv, props.export_basic_json,
             props.export_check_csv, props.export_check_json, props.export_blend, props.export_textures,
         ))
-        if meshes and not has_output:
-            layout.label(text="请选择导出格式或附属文件", icon="INFO")
         row = layout.row(align=True)
         row.scale_y = 1.25
         export = row.row(align=True)
         export.enabled = bool(meshes) and has_output
-        export.operator("export_scene.norm_asset_v2", text="选择目录并导出", icon="EXPORT")
+        export_text = "选择目录并导出" if (not meshes or has_output) else "未勾选导出项"
+        export.operator("export_scene.norm_asset_v2", text=export_text, icon="EXPORT")
         row.operator("asset_exporter_v2.open_last_export_dir", text="", icon="FILE_FOLDER")
 
 
